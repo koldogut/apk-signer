@@ -304,7 +304,7 @@ def healthz():
     except Exception:
         pass
 
-    return jsonify({"ok": True, "checks": checks, "now": utc_now_iso(), "version": "1.5.0"})
+    return jsonify({"ok": True, "checks": checks, "now": utc_now_iso(), "version": "1.6.0"})
 
 @app.post("/inspect")
 def inspect_ep():
