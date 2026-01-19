@@ -2,6 +2,7 @@
 import base64
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
@@ -12,8 +13,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
-from flask import Flask, jsonify, request, send_from_directory, send_file, abort, make_response
+import qrcode
+from flask import Flask, jsonify, request, send_from_directory, send_file, abort
 
 BASE_DIR = Path(__file__).resolve().parent
 SECRETS_PATH = BASE_DIR / "secrets.json"
@@ -33,7 +36,6 @@ def _load_secrets() -> Dict[str, Any]:
 
 SEC = _load_secrets()
 
-PIN_REQUIRED = str(SEC.get("PIN", "")).strip()
 AAPT_BIN = str(SEC.get("AAPT", "")).strip()  # ruta absoluta a aapt2 o aapt
 APKSIGNER_JAR = str(SEC.get("APKSIGNER_JAR", "")).strip()
 KEYSTORE_PATH = str(SEC.get("KEYSTORE_PATH", "")).strip()
@@ -43,6 +45,7 @@ KEY_PASS = str(SEC.get("KEY_PASS", "")).strip()
 
 WORK_DIR = Path(str(SEC.get("WORK_DIR", str(BASE_DIR / "work"))))
 LOG_DIR = Path(str(SEC.get("LOG_DIR", str(BASE_DIR / "logs"))))
+USERS_PATH = Path(str(SEC.get("USERS_PATH", str(BASE_DIR / "users.json"))))
 MAX_CONTENT_LENGTH = int(SEC.get("MAX_CONTENT_LENGTH", 100 * 1024 * 1024))  # 100MB default
 SESSION_TTL_HOURS = int(SEC.get("SESSION_TTL_HOURS", 24))
 LOG_MAX_LINES = int(SEC.get("LOG_MAX_LINES", 2000))
@@ -168,9 +171,87 @@ def verify_event_mac(evt: Dict[str, Any]) -> Tuple[str, bool]:
     except Exception:
         return ("Fallo", False)
 
-def require_pin(pin: str) -> bool:
-    # Comparación constante
-    return bool(PIN_REQUIRED) and hmac.compare_digest(pin or "", PIN_REQUIRED)
+def _base32_decode(secret: str) -> bytes:
+    cleaned = re.sub(r"\s+", "", secret or "").upper()
+    padding = "=" * ((8 - len(cleaned) % 8) % 8)
+    return base64.b32decode(cleaned + padding)
+
+def _totp_code(secret: str, for_time: Optional[int] = None, step: int = 30, digits: int = 6) -> str:
+    key = _base32_decode(secret)
+    counter = int((for_time or int(time.time())) / step)
+    counter_bytes = counter.to_bytes(8, "big")
+    digest = hmac.new(key, counter_bytes, hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    binary = (
+        ((digest[offset] & 0x7F) << 24)
+        | ((digest[offset + 1] & 0xFF) << 16)
+        | ((digest[offset + 2] & 0xFF) << 8)
+        | (digest[offset + 3] & 0xFF)
+    )
+    return str(binary % (10 ** digits)).zfill(digits)
+
+def verify_totp(secret: str, code: str, step: int = 30, digits: int = 6, skew: int = 1) -> bool:
+    code = str(code or "").strip()
+    if not re.fullmatch(rf"\d{{{digits}}}", code):
+        return False
+    now = int(time.time())
+    try:
+        for offset in range(-skew, skew + 1):
+            if hmac.compare_digest(code, _totp_code(secret, now + offset * step, step=step, digits=digits)):
+                return True
+    except Exception:
+        return False
+    return False
+
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+def load_users() -> Dict[str, Any]:
+    if not USERS_PATH.exists():
+        raise RuntimeError("No existe users.json. Ejecuta el bootstrap de usuarios.")
+    try:
+        data = json.loads(USERS_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"users.json inválido: {e}")
+    if "users" not in data or not isinstance(data["users"], list):
+        raise RuntimeError("users.json inválido: falta lista de usuarios")
+    return data
+
+def save_users(data: Dict[str, Any]) -> None:
+    tmp = USERS_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(USERS_PATH)
+
+def find_user_by_token(token: str) -> Optional[Dict[str, Any]]:
+    token = token.strip()
+    if not token:
+        return None
+    token_hash = _hash_token(token)
+    data = load_users()
+    for user in data.get("users", []):
+        if hmac.compare_digest(str(user.get("token_hash", "")), token_hash):
+            return user
+    return None
+
+def require_admin(admin_token: str, admin_code: str) -> Dict[str, Any]:
+    user = find_user_by_token(admin_token)
+    if not user or user.get("role") != "admin":
+        raise PermissionError("Token de administrador inválido")
+    if not verify_totp(str(user.get("totp_secret", "")), admin_code):
+        raise PermissionError("MFA inválido")
+    return user
+
+def build_otpauth_uri(label: str, secret: str, issuer: str = "APK Signer") -> str:
+    label_enc = quote(label.strip().replace(" ", ""))
+    issuer_enc = quote(issuer.strip())
+    return f"otpauth://totp/{label_enc}?secret={secret}&issuer={issuer_enc}"
+
+def make_qr_data_url(otpauth: str) -> str:
+    img = qrcode.make(otpauth)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
 
 def aapt_exists() -> bool:
     return check_bin(AAPT_BIN)
@@ -272,6 +353,10 @@ def add_headers(resp):
 def index():
     return send_from_directory(app.static_folder, "index.html")
 
+@app.get("/admin")
+def admin_page():
+    return send_from_directory(app.static_folder, "admin.html")
+
 @app.get("/favicon.ico")
 def favicon():
     # evita 500 si no hay favicon real
@@ -285,6 +370,7 @@ def healthz():
         "aapt_exists": aapt_exists(),
         "apksigner_jar_exists": check_bin(APKSIGNER_JAR),
         "keystore_exists": check_bin(KEYSTORE_PATH),
+        "users_exists": USERS_PATH.exists(),
         "java": java_ok(),
         "disk_free_bytes": None,
     }
@@ -304,7 +390,7 @@ def healthz():
     except Exception:
         pass
 
-    return jsonify({"ok": True, "checks": checks, "now": utc_now_iso(), "version": "1.5.0"})
+    return jsonify({"ok": True, "checks": checks, "now": utc_now_iso(), "version": "1.6.0"})
 
 @app.post("/inspect")
 def inspect_ep():
@@ -393,13 +479,18 @@ def _signed_filename(original_name: str) -> str:
 def sign_ep():
     payload = request.get_json(force=True, silent=True) or {}
     sid = str(payload.get("sessionId", "")).strip()
-    pin = str(payload.get("pin", "")).strip()
+    user_token = str(payload.get("userToken", "")).strip()
+    mfa_code = str(payload.get("mfaCode", "")).strip()
 
     if not sid:
         return jsonify({"ok": False, "error": "Falta sessionId"}), 400
-    if not require_pin(pin):
-        log_event("sign", ok=False, sessionId=sid, error="PIN incorrecto")
-        return jsonify({"ok": False, "error": "PIN incorrecto"}), 403
+    if not user_token or not mfa_code:
+        return jsonify({"ok": False, "error": "Faltan credenciales MFA"}), 400
+
+    user = find_user_by_token(user_token)
+    if not user or not verify_totp(str(user.get("totp_secret", "")), mfa_code):
+        log_event("sign", ok=False, sessionId=sid, error="MFA incorrecto")
+        return jsonify({"ok": False, "error": "MFA incorrecto"}), 403
 
     try:
         meta = load_session_meta(sid)
@@ -447,7 +538,15 @@ def sign_ep():
     meta["verifiedOk"] = False
     save_session_meta(sid, meta)
 
-    log_event("sign", ok=True, sessionId=sid, filename=meta.get("originalName", ""), ms=dt_ms, signedName=signed_name)
+    log_event(
+        "sign",
+        ok=True,
+        sessionId=sid,
+        filename=meta.get("originalName", ""),
+        ms=dt_ms,
+        signedName=signed_name,
+        userId=user.get("id", ""),
+    )
 
     return jsonify({
         "ok": True,
@@ -528,6 +627,125 @@ def download_ep(sid: str):
         max_age=0,
         conditional=True,
     )
+
+@app.post("/api/admin/verify")
+def admin_verify():
+    payload = request.get_json(force=True, silent=True) or {}
+    admin_token = str(payload.get("adminToken", "")).strip()
+    admin_code = str(payload.get("adminCode", "")).strip()
+    try:
+        admin = require_admin(admin_token, admin_code)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 403
+    return jsonify({"ok": True, "admin": {"id": admin.get("id", ""), "name": admin.get("name", "")}}), 200
+
+@app.post("/api/admin/users/list")
+def admin_users_list():
+    payload = request.get_json(force=True, silent=True) or {}
+    admin_token = str(payload.get("adminToken", "")).strip()
+    admin_code = str(payload.get("adminCode", "")).strip()
+    try:
+        require_admin(admin_token, admin_code)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 403
+
+    try:
+        data = load_users()
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    users = []
+    for user in data.get("users", []):
+        users.append({
+            "id": user.get("id", ""),
+            "name": user.get("name", ""),
+            "role": user.get("role", ""),
+            "createdAt": user.get("createdAt", ""),
+        })
+    return jsonify({"ok": True, "users": users}), 200
+
+@app.post("/api/admin/users/create")
+def admin_users_create():
+    payload = request.get_json(force=True, silent=True) or {}
+    admin_token = str(payload.get("adminToken", "")).strip()
+    admin_code = str(payload.get("adminCode", "")).strip()
+    name = str(payload.get("name", "")).strip()
+    if not name:
+        return jsonify({"ok": False, "error": "Nombre requerido"}), 400
+
+    try:
+        require_admin(admin_token, admin_code)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 403
+
+    try:
+        data = load_users()
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    new_id = secrets.token_hex(4)
+    while any(u.get("id") == new_id for u in data.get("users", [])):
+        new_id = secrets.token_hex(4)
+
+    token = secrets.token_urlsafe(24)
+    secret = base64.b32encode(os.urandom(20)).decode("ascii").strip("=").upper()
+    user = {
+        "id": new_id,
+        "name": name,
+        "role": "user",
+        "token_hash": _hash_token(token),
+        "totp_secret": secret,
+        "createdAt": utc_now_iso(),
+    }
+    data.setdefault("users", []).append(user)
+    save_users(data)
+
+    otpauth = build_otpauth_uri(f"{name}", secret)
+    qr_data_url = make_qr_data_url(otpauth)
+
+    return jsonify({
+        "ok": True,
+        "user": {
+            "id": new_id,
+            "name": name,
+            "role": "user",
+            "createdAt": user["createdAt"],
+        },
+        "token": token,
+        "secret": secret,
+        "otpauth": otpauth,
+        "qrDataUrl": qr_data_url,
+    }), 200
+
+@app.post("/api/admin/users/delete")
+def admin_users_delete():
+    payload = request.get_json(force=True, silent=True) or {}
+    admin_token = str(payload.get("adminToken", "")).strip()
+    admin_code = str(payload.get("adminCode", "")).strip()
+    user_id = str(payload.get("userId", "")).strip()
+    if not user_id:
+        return jsonify({"ok": False, "error": "userId requerido"}), 400
+
+    try:
+        require_admin(admin_token, admin_code)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 403
+
+    try:
+        data = load_users()
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    users = data.get("users", [])
+    target = next((u for u in users if u.get("id") == user_id), None)
+    if not target:
+        return jsonify({"ok": False, "error": "Usuario no encontrado"}), 404
+
+    if target.get("role") == "admin":
+        admins = [u for u in users if u.get("role") == "admin"]
+        if len(admins) <= 1:
+            return jsonify({"ok": False, "error": "No se puede borrar el último admin"}), 400
+
+    data["users"] = [u for u in users if u.get("id") != user_id]
+    save_users(data)
+    return jsonify({"ok": True}), 200
 
 @app.get("/logs/data")
 def logs_data():
