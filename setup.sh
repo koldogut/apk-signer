@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="${1:-}"
 INSTALL_DIR="/opt/apk-signer"
 USER_NAME="apk-signer"
 SDK_ROOT="${SDK_ROOT:-/opt/android-sdk}"
@@ -9,6 +8,7 @@ BUILD_TOOLS_VERSION="${BUILD_TOOLS_VERSION:-34.0.0}"
 CMDLINE_ZIP_URL="https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
 CMDLINE_SHA256_URL="https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip.sha256"
 SDKMANAGER_BIN="${SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 log() {
   echo "[apk-signer] $*"
@@ -33,7 +33,7 @@ install_packages() {
   export DEBIAN_FRONTEND=noninteractive
   log "Instalando dependencias del sistema..."
   apt-get update
-  apt-get install -y git python3 python3-venv python3-pip openjdk-17-jre-headless curl unzip jq ca-certificates
+  apt-get install -y git python3 python3-venv python3-pip openjdk-17-jre-headless curl unzip jq ca-certificates rsync
 }
 
 ensure_user() {
@@ -43,15 +43,22 @@ ensure_user() {
   fi
 }
 
-clone_repo() {
-  if [[ -d "${INSTALL_DIR}/.git" ]]; then
-    log "Actualizando repo en ${INSTALL_DIR}..."
-    sudo -u "${USER_NAME}" -H bash -lc "cd '${INSTALL_DIR}' && git pull --ff-only"
-  else
-    log "Clonando repo en ${INSTALL_DIR}..."
-    rm -rf "${INSTALL_DIR}"
-    sudo -u "${USER_NAME}" -H git clone "${REPO_URL}" "${INSTALL_DIR}"
+sync_repo() {
+  if [[ ! -d "${SCRIPT_DIR}/.git" ]]; then
+    die "Ejecuta este script desde un clon del repo (no se encontró .git)."
   fi
+
+  log "Sincronizando repo desde ${SCRIPT_DIR} a ${INSTALL_DIR}..."
+  mkdir -p "${INSTALL_DIR}"
+  rsync -a --delete \
+    --exclude ".git" \
+    --exclude ".venv" \
+    --exclude "work" \
+    --exclude "logs" \
+    --exclude "keystore/KeyStore.jks" \
+    --exclude "secrets.json" \
+    "${SCRIPT_DIR}/" "${INSTALL_DIR}/"
+  chown -R "${USER_NAME}:${USER_NAME}" "${INSTALL_DIR}"
 }
 
 install_python_deps() {
@@ -117,6 +124,11 @@ ensure_secrets() {
   fi
 }
 
+bootstrap_admin_user() {
+  log "Generando usuario administrador MFA..."
+  sudo -u "${USER_NAME}" -H "${INSTALL_DIR}/.venv/bin/python" "${INSTALL_DIR}/tools/bootstrap_users.py"
+}
+
 update_secrets_paths() {
   local aapt_src="${SDK_ROOT}/build-tools/${BUILD_TOOLS_VERSION}/aapt2"
   local apksigner_src="${SDK_ROOT}/build-tools/${BUILD_TOOLS_VERSION}/lib/apksigner.jar"
@@ -169,19 +181,16 @@ post_checks() {
   fi
 }
 
-if [[ -z "${REPO_URL}" ]]; then
-  die "Uso: sudo bash setup.sh <repo_url>"
-fi
-
 require_root
 install_packages
 ensure_user
-clone_repo
+sync_repo
 install_python_deps
 install_android_build_tools
 prepare_dirs
 ensure_secrets
 update_secrets_paths
+bootstrap_admin_user
 install_systemd_units
 post_checks
 

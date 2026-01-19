@@ -4,27 +4,32 @@ Esta guía permite clonar y ejecutar el proyecto en cualquier Debian/Ubuntu reci
 
 ## 1) Instalación automática con `setup.sh`
 
-El script instala dependencias del sistema, descarga Android Build Tools públicos (`aapt2` y `apksigner.jar`), configura rutas por defecto y habilita systemd.
+El script instala dependencias del sistema, descarga Android Build Tools públicos (`aapt2` y `apksigner.jar`), configura rutas por defecto y habilita systemd. Debe ejecutarse desde el clon local del repo.
 
 ```bash
-sudo bash setup.sh <repo_url>
+git clone https://github.com/tu-org/apk-signer.git
+cd apk-signer
+sudo bash setup.sh
 ```
 
 Variables opcionales:
 
 ```bash
-SDK_ROOT=/opt/android-sdk BUILD_TOOLS_VERSION=34.0.0 sudo bash setup.sh <repo_url>
+SDK_ROOT=/opt/android-sdk BUILD_TOOLS_VERSION=34.0.0 sudo bash setup.sh
 ```
 
 Después de ejecutar el script:
 
-1. Edita `/opt/apk-signer/secrets.json` con PIN, alias y contraseñas reales.
-2. Copia tu `KeyStore.jks` a `/opt/apk-signer/keystore/KeyStore.jks`.
-3. Verifica estado:
+1. Guarda el token y el QR del administrador MFA que imprime `setup.sh` (necesarios para `/admin`).
+2. Edita `/opt/apk-signer/secrets.json` con alias y contraseñas reales.
+3. Copia tu `KeyStore.jks` a `/opt/apk-signer/keystore/KeyStore.jks`.
+4. Verifica estado:
 
 ```bash
 curl -s http://localhost:8001/healthz | jq
 ```
+
+El archivo de usuarios MFA se crea en `/opt/apk-signer/users.json` y se administra desde `/admin`.
 
 ## 2) Instalación manual (paso a paso)
 
@@ -32,7 +37,7 @@ curl -s http://localhost:8001/healthz | jq
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y git python3 python3-venv python3-pip openjdk-17-jre-headless curl unzip jq ca-certificates
+sudo apt-get install -y git python3 python3-venv python3-pip openjdk-17-jre-headless curl unzip jq ca-certificates rsync
 ```
 
 ### Android Build Tools (aapt2 + apksigner.jar)
@@ -87,7 +92,7 @@ Coloca un keystore real (JKS) y actualiza:
 1. Clona el repo:
 
 ```bash
-git clone <repo_url>
+git clone https://github.com/tu-org/apk-signer.git
 cd apk-signer
 ```
 
@@ -119,7 +124,7 @@ La app quedará en `http://localhost:8001`.
 ### Arranque (modo servicio con systemd)
 
 ```bash
-sudo bash setup.sh <repo_url>
+sudo bash setup.sh
 ```
 
 El script crea el usuario `apk-signer`, instala dependencias, prepara rutas y habilita los servicios systemd.

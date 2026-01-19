@@ -18,25 +18,31 @@
 
 **Solución:** revisa `secrets.json` y permisos de lectura.
 
-## 4) Error "PIN incorrecto"
+## 4) Error "MFA incorrecto"
 
-**Causa:** el PIN enviado no coincide con `PIN` en `secrets.json`.
+**Causa:** el token de usuario o el código MFA no son válidos.
 
-**Solución:** actualiza el PIN del cliente o cambia `PIN`.
+**Solución:** verifica que el usuario existe en `/opt/apk-signer/users.json`, que el token sea el correcto y que el MFA sea el actual.
 
-## 5) Error "Input APK no existe" o "Sesión no encontrada"
+## 5) Error "No existe users.json"
+
+**Causa:** no se ejecutó el bootstrap de usuarios durante la instalación.
+
+**Solución:** ejecuta `sudo -u apk-signer /opt/apk-signer/.venv/bin/python /opt/apk-signer/tools/bootstrap_users.py`.
+
+## 6) Error "Input APK no existe" o "Sesión no encontrada"
 
 **Causa:** la sesión expiró o se borró por el cleanup.
 
 **Solución:** vuelve a subir el APK y firma de nuevo.
 
-## 6) `java -version` falla
+## 7) `java -version` falla
 
 **Causa:** Java no instalado.
 
 **Solución:** `sudo apt-get install -y openjdk-17-jre-headless`.
 
-## 7) Problemas de permisos en `/opt/apk-signer`
+## 8) Problemas de permisos en `/opt/apk-signer`
 
 **Causa:** archivos creados con otro usuario.
 
@@ -46,7 +52,7 @@
 sudo chown -R apk-signer:apk-signer /opt/apk-signer
 ```
 
-## 8) `sdkmanager` no acepta licencias
+## 9) `sdkmanager` no acepta licencias
 
 **Causa:** el entorno no permite aceptar licencias de Android SDK automáticamente.
 
