@@ -1,0 +1,10 @@
+[Unit]
+Description=Run APK Signer maintenance periodically
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=apk-signer-cleanup.service
+
+[Install]
+WantedBy=timers.target

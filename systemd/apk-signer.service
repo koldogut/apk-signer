@@ -1,0 +1,17 @@
+[Unit]
+Description=APK Signer Web
+After=network.target
+
+[Service]
+Type=simple
+User=apk-signer
+Group=apk-signer
+WorkingDirectory=/opt/apk-signer
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/apk-signer/.venv/bin/gunicorn -w 2 -b 0.0.0.0:8001 --access-logfile - --error-logfile - app:app
+Restart=on-failure
+RestartSec=2
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

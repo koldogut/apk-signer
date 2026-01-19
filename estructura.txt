@@ -1,0 +1,24 @@
+apk-signer/
+├─ app.py
+├─ requirements.txt
+├─ secrets.example.json
+├─ setup.sh
+├─ .gitignore
+├─ README.md
+├─ docs/
+│  ├─ INSTALACION.md
+│  └─ RESUMEN_ERRORES.md
+├─ static/
+│  ├─ index.html
+│  ├─ css/
+│  │  └─ app.css
+│  └─ js/
+│     └─ app.js
+├─ systemd/
+│  ├─ apk-signer.service
+│  ├─ apk-signer-cleanup.service
+│  └─ apk-signer-cleanup.timer
+├─ tools/
+│  └─ cleanup.py
+└─ keystore/
+   └─ KeyStore.jks.dummy

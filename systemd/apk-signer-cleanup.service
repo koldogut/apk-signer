@@ -1,0 +1,9 @@
+[Unit]
+Description=APK Signer maintenance (purge sessions and rotate logs)
+
+[Service]
+Type=oneshot
+User=apk-signer
+Group=apk-signer
+WorkingDirectory=/opt/apk-signer
+ExecStart=/opt/apk-signer/.venv/bin/python /opt/apk-signer/tools/cleanup.py

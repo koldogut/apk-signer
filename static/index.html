@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>APK Signer</title>
+  <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div class="brand-text">
+        <div class="brand-title">APK Signer</div>
+        <div class="brand-subtitle">Inspección, firma y verificación de APK</div>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <button id="btnOpenLogs" class="btn btn-ghost" type="button">Logs</button>
+      <a class="btn btn-ghost" href="/healthz" target="_blank" rel="noopener">Health</a>
+    </div>
+  </header>
+
+  <main class="page">
+    <section class="grid">
+      <!-- Left: Artefacto + PIN + acciones -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Artefacto y firma</div>
+          <div class="status-pill" id="statusPill" data-state="idle">
+            <span class="dot"></span>
+            <span class="label" id="statusLabel">Listo</span>
+          </div>
+        </div>
+
+        <div class="card-body">
+          <div class="field">
+            <div class="field-label">APK</div>
+            <div id="dropzone" class="dropzone" role="button" tabindex="0" aria-label="Subir APK">
+              <input id="fileInput" class="file-input" type="file" accept=".apk" />
+              <div class="dz-main">
+                <div class="dz-title">Arrastra aquí tu APK</div>
+                <div class="dz-subtitle">o pulsa para seleccionarlo</div>
+              </div>
+              <div class="dz-meta" id="dzMeta">Ningún archivo seleccionado</div>
+            </div>
+          </div>
+
+          <div class="row-2">
+            <div class="field">
+              <div class="field-label">PIN</div>
+              <div class="pin-wrap">
+                <input id="pinInput" class="input" type="password" inputmode="numeric" autocomplete="off" placeholder="Introduce el PIN" />
+                <button id="togglePin" class="pin-eye" type="button" aria-label="Mostrar/Ocultar PIN">
+                  <!-- ojo (SVG inline para que no “falle la ruta”) -->
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 5c5.5 0 9.5 5.2 10 6-.5.8-4.5 6-10 6S2.5 11.8 2 11c.5-.8 4.5-6 10-6zm0 2C7.8 7 4.6 10.6 4 11c.6.4 3.8 4 8 4s7.4-3.6 8-4c-.6-.4-3.8-4-8-4zm0 2.2A1.8 1.8 0 1 1 12 14a1.8 1.8 0 0 1 0-3.6z"></path>
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="field">
+              <div class="field-label">Sesión</div>
+              <div class="mono-box" id="sessionBox">—</div>
+            </div>
+          </div>
+
+          <div class="btn-row">
+            <button id="btnSign" class="btn btn-primary" type="button" disabled>Firmar</button>
+            <button id="btnVerify" class="btn" type="button" disabled>Verificar firma</button>
+            <button id="btnDownload" class="btn" type="button" disabled>Descargar</button>
+            <button id="btnReset" class="btn btn-ghost" type="button">Reiniciar</button>
+          </div>
+
+          <div class="hint">
+            La descarga se habilita tras <b>firma correcta</b>.
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: Info APK -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Información del APK</div>
+          <div class="card-actions">
+            <button id="btnPerms" class="btn btn-ghost" type="button" disabled>Permisos</button>
+          </div>
+        </div>
+
+        <div class="card-body">
+          <div id="apkEmpty" class="empty">
+            Ningún APK inspeccionado
+          </div>
+
+          <div id="apkInfo" class="apkinfo hidden">
+            <div class="apk-title" id="apkTitle">—</div>
+            <div class="tags" id="apkTags"></div>
+
+            <div class="kv">
+              <div class="k">SHA-256</div>
+              <div class="v mono" id="apkSha">—</div>
+              <div class="k">Tamaño</div>
+              <div class="v mono" id="apkSize">—</div>
+            </div>
+
+            <div class="perm-preview">
+              <div class="perm-head">
+                <div class="perm-title">Permisos</div>
+                <button id="btnPermsInline" class="link" type="button">…Detalle completo</button>
+              </div>
+              <div class="perm-text" id="apkPermsPreview">—</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom: Resultado / salida -->
+      <div class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">Resultado</div>
+          <div class="card-actions">
+            <button id="btnCopyOutput" class="btn btn-ghost" type="button">Copiar salida</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <pre id="output" class="output" aria-label="Salida"></pre>
+          <div class="debug" id="debugBox"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Modal Permisos -->
+  <div id="modalPerms" class="modal hidden" role="dialog" aria-modal="true" aria-label="Permisos">
+    <div class="modal-backdrop" data-close="1"></div>
+    <div class="modal-card">
+      <div class="modal-head">
+        <div class="modal-title">Permisos del APK</div>
+        <div class="modal-actions">
+          <button id="btnCopyPerms" class="btn btn-ghost" type="button">Copiar</button>
+          <button class="btn btn-ghost" type="button" data-close="1">Cerrar</button>
+        </div>
+      </div>
+      <div class="modal-body">
+        <pre id="permsFull" class="modal-pre"></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Logs -->
+  <div id="modalLogs" class="modal hidden" role="dialog" aria-modal="true" aria-label="Logs">
+    <div class="modal-backdrop" data-close="1"></div>
+    <div class="modal-card modal-card-wide">
+      <div class="modal-head">
+        <div class="modal-title">Logs</div>
+        <div class="modal-actions">
+          <button id="btnRefreshLogs" class="btn btn-ghost" type="button">Actualizar</button>
+          <button class="btn btn-ghost" type="button" data-close="1">Cerrar</button>
+        </div>
+      </div>
+      <div class="modal-body">
+        <div class="logs-table-wrap">
+          <table class="logs-table" id="logsTable">
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Acción</th>
+                <th>Resultado</th>
+                <th>Archivo</th>
+                <th>Integridad</th>
+                <th>IP</th>
+              </tr>
+            </thead>
+            <tbody id="logsTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
