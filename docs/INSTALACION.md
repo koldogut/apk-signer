@@ -43,6 +43,8 @@ ss -tulpn | grep 8001
 curl -I http://localhost/
 ```
 
+Si ves errores 413 al subir APKs, revisa el límite `client_max_body_size` en la configuración de nginx.
+
 ## 2) Instalación manual (paso a paso)
 
 ### Dependencias del sistema

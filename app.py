@@ -196,7 +196,7 @@ def _totp_code(secret: str, for_time: Optional[int] = None, step: int = 30, digi
     )
     return str(binary % (10 ** digits)).zfill(digits)
 
-def verify_totp(secret: str, code: str, step: int = 30, digits: int = 6, skew: int = 1) -> bool:
+def verify_totp(secret: str, code: str, step: int = 30, digits: int = 6, skew: int = 2) -> bool:
     code = str(code or "").strip()
     if not re.fullmatch(rf"\d{{{digits}}}", code):
         return False

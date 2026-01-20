@@ -58,4 +58,6 @@ Si necesitas diagnosticar por tu cuenta, revisa estado, logs y el listener del p
 
 Si faltan `secrets.json` o el `KeyStore.jks`, el portal mostrará una advertencia y la firma quedará deshabilitada hasta completar esos pasos.
 
+Si ves errores 413 al subir APKs, revisa el límite `client_max_body_size` en la configuración de nginx.
+
 Para más detalles y solución de errores, revisa `docs/INSTALACION.md` y `docs/RESUMEN_ERRORES.md`.
