@@ -17,12 +17,12 @@ El repositorio incluye el backend, UI, scripts y servicios systemd. Para ejecuta
 
 > Nota: el keystore no se incluye en el repo. Debe copiarse localmente y configurarse en `secrets.json`.
 
-## Instalación rápida (modo sistema con systemd)
+## Instalación rápida (con systemd)
 
 1. Clona el repo y ejecuta el instalador (como root). El script usa el código del clon local, no requiere URL adicional:
 
    ```bash
-   git clone https://github.com/tu-org/apk-signer.git
+   git clone https://github.com/koldogut/apk-signer.git
    cd apk-signer
    sudo bash setup.sh
    ```
