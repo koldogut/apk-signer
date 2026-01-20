@@ -22,7 +22,7 @@ El repositorio incluye el backend, UI, scripts y servicios systemd. Para ejecuta
 1. Clona el repo y ejecuta el instalador (como root). El script usa el código del clon local, no requiere URL adicional:
 
    ```bash
-   git clone https://github.com/tu-org/apk-signer.git
+   git clone https://github.com/koldogut/apk-signer.git
    cd apk-signer
    sudo bash setup.sh
    ```
