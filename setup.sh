@@ -36,6 +36,23 @@ install_packages() {
   apt-get install -y git python3 python3-venv python3-pip openjdk-17-jre-headless curl unzip jq ca-certificates rsync
 }
 
+cleanup_legacy_install() {
+  if [[ -d "/etc/systemd/system/apk-signer.service.d" ]]; then
+    log "Eliminando overrides antiguos de systemd..."
+    rm -rf "/etc/systemd/system/apk-signer.service.d"
+  fi
+
+  if [[ -d "${INSTALL_DIR}/venv" ]]; then
+    log "Eliminando entorno virtual antiguo ${INSTALL_DIR}/venv..."
+    rm -rf "${INSTALL_DIR}/venv"
+  fi
+
+  if [[ -S "/run/apk-signer/uvicorn.sock" ]]; then
+    log "Eliminando socket legado /run/apk-signer/uvicorn.sock..."
+    rm -f "/run/apk-signer/uvicorn.sock"
+  fi
+}
+
 ensure_user() {
   if ! id -u "${USER_NAME}" >/dev/null 2>&1; then
     log "Creando usuario del sistema ${USER_NAME}..."
@@ -174,6 +191,8 @@ update_secrets_paths() {
 
 install_systemd_units() {
   log "Instalando servicios systemd..."
+  systemctl stop apk-signer.service >/dev/null 2>&1 || true
+  systemctl reset-failed apk-signer.service >/dev/null 2>&1 || true
   cp "${INSTALL_DIR}/systemd/"*.service /etc/systemd/system/
   cp "${INSTALL_DIR}/systemd/"*.timer /etc/systemd/system/
   systemctl daemon-reload
@@ -187,6 +206,16 @@ check_service() {
     log "Servicio apk-signer activo."
   else
     warn "Servicio apk-signer no está activo. Revisa logs con: journalctl -u apk-signer.service -n 200 --no-pager"
+  fi
+
+  if [[ -d "/etc/systemd/system/apk-signer.service.d" ]]; then
+    warn "Se detectaron overrides en /etc/systemd/system/apk-signer.service.d. Revisa posibles configuraciones antiguas."
+  fi
+
+  if systemctl cat apk-signer.service | grep -q "gunicorn"; then
+    log "Servicio usa gunicorn."
+  else
+    warn "El servicio no usa gunicorn. Revisa /etc/systemd/system/apk-signer.service."
   fi
 
   if ss -tulpn | grep -q ":8001"; then
@@ -220,6 +249,7 @@ post_checks() {
 
 require_root
 install_packages
+cleanup_legacy_install
 ensure_user
 sync_repo
 verify_web_assets

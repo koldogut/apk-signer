@@ -53,13 +53,6 @@ curl -I http://localhost:8001/
 
 Si `/healthz` no responde, revisa permisos de `/opt/apk-signer`, la existencia de `secrets.json` y de `users.json`, y que el servicio `apk-signer` esté activo.
 
-Si necesitas soporte para diagnosticar, comparte la salida de:
-
-```bash
-sudo systemctl status apk-signer.service --no-pager
-sudo journalctl -u apk-signer.service -n 200 --no-pager
-ss -tulpn | grep 8001
-curl -v http://localhost:8001/healthz
-```
+Si necesitas diagnosticar por tu cuenta, revisa estado, logs y el listener del puerto antes de reintentar la instalación.
 
 Para más detalles y solución de errores, revisa `docs/INSTALACION.md` y `docs/RESUMEN_ERRORES.md`.
