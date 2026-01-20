@@ -10,8 +10,9 @@
   const fileInput = el("fileInput");
   const dzMeta = el("dzMeta");
 
-  const pinInput = el("pinInput");
-  const togglePin = el("togglePin");
+  const tokenInput = el("tokenInput");
+  const mfaInput = el("mfaInput");
+  const toggleToken = el("toggleToken");
 
   const btnSign = el("btnSign");
   const btnVerify = el("btnVerify");
@@ -46,6 +47,7 @@
   const modalLogs = el("modalLogs");
   const btnRefreshLogs = el("btnRefreshLogs");
   const logsTbody = el("logsTbody");
+  const systemNotice = el("systemNotice");
 
   // ----------------------------
   // State
@@ -160,6 +162,27 @@
       dbg("HEALTHZ error", { message: e.message, status: e.status || "" });
     }
     dbg("navigator.onLine", navigator.onLine);
+  }
+
+  async function updateSystemNotice() {
+    if (!systemNotice) return;
+    try {
+      const j = await apiFetch("/healthz", { method: "GET" }, 15000);
+      const checks = j.checks || {};
+      const warnings = [];
+      if (!checks.secrets_exists) warnings.push("Falta secrets.json");
+      if (checks.secrets_error) warnings.push(checks.secrets_error);
+      if (!checks.keystore_exists) warnings.push("Falta KeyStore.jks");
+      if (warnings.length) {
+        systemNotice.textContent = `Atención: ${warnings.join(". ")}. Actualiza los ficheros y reinicia el servicio.`;
+        systemNotice.classList.remove("hidden");
+      } else {
+        systemNotice.classList.add("hidden");
+      }
+    } catch {
+      systemNotice.textContent = "Atención: no se puede validar el estado del servicio.";
+      systemNotice.classList.remove("hidden");
+    }
   }
 
   // ----------------------------
@@ -313,10 +336,11 @@
     if (busy) return;
     if (!currentSessionId) return;
 
-    const pin = (pinInput.value || "").trim();
-    if (!pin) {
-      setStatus("warn", "PIN requerido");
-      setOutput("Introduce el PIN antes de firmar.");
+    const userToken = (tokenInput.value || "").trim();
+    const mfaCode = (mfaInput.value || "").trim();
+    if (!userToken || !mfaCode) {
+      setStatus("warn", "MFA requerido");
+      setOutput("Introduce el token y el código MFA antes de firmar.");
       return;
     }
 
@@ -329,7 +353,7 @@
       const j = await apiFetch("/sign", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: currentSessionId, pin }),
+        body: JSON.stringify({ sessionId: currentSessionId, userToken, mfaCode }),
       }, 240000);
 
       dbg("SIGN response", j);
@@ -491,10 +515,10 @@
     fileInput.value = "";
   });
 
-  // PIN eye toggle
-  togglePin.addEventListener("click", () => {
-    const isPw = pinInput.getAttribute("type") === "password";
-    pinInput.setAttribute("type", isPw ? "text" : "password");
+  // Token eye toggle
+  toggleToken.addEventListener("click", () => {
+    const isPw = tokenInput.getAttribute("type") === "password";
+    tokenInput.setAttribute("type", isPw ? "text" : "password");
   });
 
   btnSign.addEventListener("click", sign);
@@ -502,7 +526,8 @@
   btnDownload.addEventListener("click", downloadSigned);
 
   btnReset.addEventListener("click", () => {
-    pinInput.value = "";
+    tokenInput.value = "";
+    mfaInput.value = "";
     resetUi();
   });
 
@@ -561,4 +586,5 @@
 
   // Init
   resetUi();
+  updateSystemNotice();
 })();
