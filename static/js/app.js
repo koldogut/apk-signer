@@ -10,8 +10,9 @@
   const fileInput = el("fileInput");
   const dzMeta = el("dzMeta");
 
-  const pinInput = el("pinInput");
-  const togglePin = el("togglePin");
+  const tokenInput = el("tokenInput");
+  const mfaInput = el("mfaInput");
+  const toggleToken = el("toggleToken");
 
   const btnSign = el("btnSign");
   const btnVerify = el("btnVerify");
@@ -313,10 +314,11 @@
     if (busy) return;
     if (!currentSessionId) return;
 
-    const pin = (pinInput.value || "").trim();
-    if (!pin) {
-      setStatus("warn", "PIN requerido");
-      setOutput("Introduce el PIN antes de firmar.");
+    const userToken = (tokenInput.value || "").trim();
+    const mfaCode = (mfaInput.value || "").trim();
+    if (!userToken || !mfaCode) {
+      setStatus("warn", "MFA requerido");
+      setOutput("Introduce el token y el código MFA antes de firmar.");
       return;
     }
 
@@ -329,7 +331,7 @@
       const j = await apiFetch("/sign", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: currentSessionId, pin }),
+        body: JSON.stringify({ sessionId: currentSessionId, userToken, mfaCode }),
       }, 240000);
 
       dbg("SIGN response", j);
@@ -491,10 +493,10 @@
     fileInput.value = "";
   });
 
-  // PIN eye toggle
-  togglePin.addEventListener("click", () => {
-    const isPw = pinInput.getAttribute("type") === "password";
-    pinInput.setAttribute("type", isPw ? "text" : "password");
+  // Token eye toggle
+  toggleToken.addEventListener("click", () => {
+    const isPw = tokenInput.getAttribute("type") === "password";
+    tokenInput.setAttribute("type", isPw ? "text" : "password");
   });
 
   btnSign.addEventListener("click", sign);
@@ -502,7 +504,8 @@
   btnDownload.addEventListener("click", downloadSigned);
 
   btnReset.addEventListener("click", () => {
-    pinInput.value = "";
+    tokenInput.value = "";
+    mfaInput.value = "";
     resetUi();
   });
 
