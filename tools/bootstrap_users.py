@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -57,18 +58,60 @@ def print_qr_terminal(otpauth: str) -> None:
     print("")
 
 
+def normalize_secret(secret: str) -> str:
+    return re.sub(r"\s+", "", secret or "").upper()
+
+
+def write_qr_assets(otpauth: str, qr_path: Path, otpauth_path: Path) -> None:
+    qrencode = shutil.which("qrencode")
+    otpauth_path.write_text(f"{otpauth}\n", encoding="utf-8")
+    os.chmod(otpauth_path, 0o600)
+
+    if qrencode:
+        try:
+            subprocess.run([qrencode, "-o", str(qr_path), "-t", "PNG", otpauth], check=True)
+            os.chmod(qr_path, 0o600)
+            return
+        except Exception:
+            pass
+
+    img = qrcode.make(otpauth)
+    img.save(qr_path)
+    os.chmod(qr_path, 0o600)
+
+
 def main() -> None:
     sec = load_secrets()
     users_path = Path(sec.get("USERS_PATH", str(BASE_DIR / "users.json")))
 
     if users_path.exists():
-        print(f"[apk-signer] users.json ya existe en {users_path}. No se modifica.")
+        data = json.loads(users_path.read_text(encoding="utf-8"))
+        admin = next((u for u in data.get("users", []) if u.get("role") == "admin"), None)
+        if not admin:
+            raise SystemExit("[apk-signer] users.json existe pero no hay usuario admin.")
+
+        admin_secret = normalize_secret(admin.get("totp_secret", ""))
+        if not admin_secret:
+            raise SystemExit("[apk-signer] Usuario admin sin totp_secret.")
+
+        otpauth = build_otpauth_uri(admin.get("name", "Administrador"), admin_secret)
+        qr_path = users_path.parent / "admin-qr.png"
+        otpauth_path = users_path.parent / "admin-otpauth.txt"
+        write_qr_assets(otpauth, qr_path, otpauth_path)
+
+        print(f"[apk-signer] users.json ya existe en {users_path}.")
+        print("[apk-signer] No se puede recuperar el token admin original.")
+        print(f"[apk-signer] QR admin regenerado: {qr_path}")
+        print(f"[apk-signer] OTPAUTH guardado en: {otpauth_path}")
+        print(f"[apk-signer] OTPAUTH: {otpauth}")
+        print("[apk-signer] Escanea este QR con Google Authenticator:")
+        print_qr_terminal(otpauth)
         return
 
     users_path.parent.mkdir(parents=True, exist_ok=True)
 
     admin_token = secrets.token_urlsafe(24)
-    admin_secret = base64.b32encode(os.urandom(20)).decode("ascii").strip("=").upper()
+    admin_secret = normalize_secret(base64.b32encode(os.urandom(20)).decode("ascii").strip("="))
 
     data = {
         "users": [
@@ -87,15 +130,15 @@ def main() -> None:
     os.chmod(users_path, 0o600)
 
     otpauth = build_otpauth_uri("Administrador", admin_secret)
-    img = qrcode.make(otpauth)
     qr_path = users_path.parent / "admin-qr.png"
-    img.save(qr_path)
-    os.chmod(qr_path, 0o600)
+    otpauth_path = users_path.parent / "admin-otpauth.txt"
+    write_qr_assets(otpauth, qr_path, otpauth_path)
 
     print("[apk-signer] Usuario administrador creado.")
     print(f"[apk-signer] Token admin: {admin_token}")
     print(f"[apk-signer] MFA secret: {admin_secret}")
     print(f"[apk-signer] QR admin: {qr_path}")
+    print(f"[apk-signer] OTPAUTH guardado en: {otpauth_path}")
     print(f"[apk-signer] OTPAUTH: {otpauth}")
     print("[apk-signer] Escanea este QR con Google Authenticator:")
     print_qr_terminal(otpauth)

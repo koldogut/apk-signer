@@ -273,6 +273,10 @@ post_checks() {
     warn "No hay keystore en ${INSTALL_DIR}/keystore/KeyStore.jks. Copia un JKS real y ajusta secrets.json."
   fi
 
+  if [[ ! -f "${INSTALL_DIR}/admin-otpauth.txt" ]]; then
+    warn "No se encontró ${INSTALL_DIR}/admin-otpauth.txt. Ejecuta tools/bootstrap_users.py para regenerar el QR."
+  fi
+
   if [[ ! -x "${INSTALL_DIR}/tools/aapt2" ]]; then
     warn "aapt2 no está instalado o no es ejecutable. Revisa la instalación del SDK."
   fi
