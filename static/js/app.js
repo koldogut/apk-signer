@@ -47,6 +47,7 @@
   const modalLogs = el("modalLogs");
   const btnRefreshLogs = el("btnRefreshLogs");
   const logsTbody = el("logsTbody");
+  const systemNotice = el("systemNotice");
 
   // ----------------------------
   // State
@@ -161,6 +162,27 @@
       dbg("HEALTHZ error", { message: e.message, status: e.status || "" });
     }
     dbg("navigator.onLine", navigator.onLine);
+  }
+
+  async function updateSystemNotice() {
+    if (!systemNotice) return;
+    try {
+      const j = await apiFetch("/healthz", { method: "GET" }, 15000);
+      const checks = j.checks || {};
+      const warnings = [];
+      if (!checks.secrets_exists) warnings.push("Falta secrets.json");
+      if (checks.secrets_error) warnings.push(checks.secrets_error);
+      if (!checks.keystore_exists) warnings.push("Falta KeyStore.jks");
+      if (warnings.length) {
+        systemNotice.textContent = `Atención: ${warnings.join(". ")}. Actualiza los ficheros y reinicia el servicio.`;
+        systemNotice.classList.remove("hidden");
+      } else {
+        systemNotice.classList.add("hidden");
+      }
+    } catch {
+      systemNotice.textContent = "Atención: no se puede validar el estado del servicio.";
+      systemNotice.classList.remove("hidden");
+    }
   }
 
   // ----------------------------
@@ -564,4 +586,5 @@
 
   // Init
   resetUi();
+  updateSystemNotice();
 })();

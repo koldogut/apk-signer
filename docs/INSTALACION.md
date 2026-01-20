@@ -7,7 +7,7 @@ Esta guía permite clonar y ejecutar el proyecto en cualquier Debian/Ubuntu reci
 El script instala dependencias del sistema, descarga Android Build Tools públicos (`aapt2` y `apksigner.jar`), configura rutas por defecto y habilita systemd. Debe ejecutarse desde el clon local del repo.
 
 ```bash
-git clone https://github.com/tu-org/apk-signer.git
+git clone https://github.com/koldogut/apk-signer.git
 cd apk-signer
 sudo bash setup.sh
 ```
@@ -30,15 +30,17 @@ Después de ejecutar el script:
 curl -s http://localhost:8001/healthz | jq
 ```
 
-El archivo de usuarios MFA se crea en `/opt/apk-signer/users.json` y se administra desde `/admin`.
+El archivo de usuarios MFA se crea en `/opt/apk-signer/users.json` y se administra desde `http://localhost/admin`.
+El portal web se sirve desde `http://localhost/` vía nginx.
 
 Comprobaciones adicionales recomendadas:
 
 ```bash
 sudo systemctl status apk-signer.service --no-pager
+sudo systemctl status nginx --no-pager
 sudo journalctl -u apk-signer.service -n 200 --no-pager
 ss -tulpn | grep 8001
-curl -I http://localhost:8001/
+curl -I http://localhost/
 ```
 
 ## 2) Instalación manual (paso a paso)
@@ -47,7 +49,7 @@ curl -I http://localhost:8001/
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y git python3 python3-venv python3-pip openjdk-17-jre-headless curl unzip jq ca-certificates rsync
+sudo apt-get install -y git python3 python3-venv python3-pip openjdk-17-jre-headless curl unzip jq ca-certificates rsync nginx qrencode
 ```
 
 ### Android Build Tools (aapt2 + apksigner.jar)
@@ -102,7 +104,7 @@ Coloca un keystore real (JKS) y actualiza:
 1. Clona el repo:
 
 ```bash
-git clone https://github.com/tu-org/apk-signer.git
+git clone https://github.com/koldogut/apk-signer.git
 cd apk-signer
 ```
 

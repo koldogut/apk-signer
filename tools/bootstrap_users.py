@@ -4,6 +4,8 @@ import hashlib
 import json
 import os
 import secrets
+import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -32,6 +34,27 @@ def build_otpauth_uri(label: str, secret: str, issuer: str = "APK Signer") -> st
     label_enc = quote(label.strip().replace(" ", ""))
     issuer_enc = quote(issuer.strip())
     return f"otpauth://totp/{label_enc}?secret={secret}&issuer={issuer_enc}"
+
+
+def print_qr_terminal(otpauth: str) -> None:
+    qrencode = shutil.which("qrencode")
+    if qrencode:
+        try:
+            subprocess.run([qrencode, "-t", "ANSIUTF8", otpauth], check=True)
+            return
+        except Exception:
+            pass
+
+    qr = qrcode.QRCode(border=1)
+    qr.add_data(otpauth)
+    qr.make(fit=True)
+    matrix = qr.get_matrix()
+    black = "██"
+    white = "  "
+    print("")
+    for row in matrix:
+        print("".join(black if cell else white for cell in row))
+    print("")
 
 
 def main() -> None:
@@ -74,6 +97,8 @@ def main() -> None:
     print(f"[apk-signer] MFA secret: {admin_secret}")
     print(f"[apk-signer] QR admin: {qr_path}")
     print(f"[apk-signer] OTPAUTH: {otpauth}")
+    print("[apk-signer] Escanea este QR con Google Authenticator:")
+    print_qr_terminal(otpauth)
 
 
 if __name__ == "__main__":

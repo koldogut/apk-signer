@@ -20,6 +20,8 @@ from flask import Flask, jsonify, request, send_from_directory, send_file, abort
 
 BASE_DIR = Path(__file__).resolve().parent
 SECRETS_PATH = BASE_DIR / "secrets.json"
+SECRETS_MISSING = False
+SECRETS_ERROR: Optional[str] = None
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 
@@ -27,12 +29,16 @@ app = Flask(__name__, static_folder="static", static_url_path="/static")
 # Config / secrets
 # ----------------------------
 def _load_secrets() -> Dict[str, Any]:
+    global SECRETS_MISSING, SECRETS_ERROR
     if not SECRETS_PATH.exists():
-        raise RuntimeError(f"No existe {SECRETS_PATH}. Crea secrets.json a partir de secrets.example.json")
+        SECRETS_MISSING = True
+        SECRETS_ERROR = f"No existe {SECRETS_PATH}. Crea secrets.json a partir de secrets.example.json"
+        return {}
     try:
         return json.loads(SECRETS_PATH.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
-        raise RuntimeError(f"secrets.json inválido: {e}")
+        SECRETS_ERROR = f"secrets.json inválido: {e}"
+        return {}
 
 SEC = _load_secrets()
 
@@ -370,6 +376,8 @@ def healthz():
         "aapt_exists": aapt_exists(),
         "apksigner_jar_exists": check_bin(APKSIGNER_JAR),
         "keystore_exists": check_bin(KEYSTORE_PATH),
+        "secrets_exists": SECRETS_PATH.exists(),
+        "secrets_error": SECRETS_ERROR or "",
         "users_exists": USERS_PATH.exists(),
         "java": java_ok(),
         "disk_free_bytes": None,
@@ -484,6 +492,8 @@ def sign_ep():
 
     if not sid:
         return jsonify({"ok": False, "error": "Falta sessionId"}), 400
+    if SECRETS_ERROR or SECRETS_MISSING:
+        return jsonify({"ok": False, "error": "Falta configurar secrets.json"}), 503
     if not user_token or not mfa_code:
         return jsonify({"ok": False, "error": "Faltan credenciales MFA"}), 400
 

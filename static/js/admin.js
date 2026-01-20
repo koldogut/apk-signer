@@ -24,6 +24,7 @@
   const resultOtpAuth = el("resultOtpAuth");
 
   const usersTbody = el("usersTbody");
+  const systemNotice = el("systemNotice");
 
   let verified = false;
 
@@ -61,6 +62,27 @@
   function setStatus(msg, ok = true) {
     adminStatus.textContent = msg;
     adminStatus.style.color = ok ? "" : "var(--bad)";
+  }
+
+  async function updateSystemNotice() {
+    if (!systemNotice) return;
+    try {
+      const j = await apiFetch("/healthz", { method: "GET" }, 15000);
+      const checks = j.checks || {};
+      const warnings = [];
+      if (!checks.secrets_exists) warnings.push("Falta secrets.json");
+      if (checks.secrets_error) warnings.push(checks.secrets_error);
+      if (!checks.keystore_exists) warnings.push("Falta KeyStore.jks");
+      if (warnings.length) {
+        systemNotice.textContent = `Atención: ${warnings.join(". ")}. Actualiza los ficheros y reinicia el servicio.`;
+        systemNotice.classList.remove("hidden");
+      } else {
+        systemNotice.classList.add("hidden");
+      }
+    } catch {
+      systemNotice.textContent = "Atención: no se puede validar el estado del servicio.";
+      systemNotice.classList.remove("hidden");
+    }
   }
 
   function setUnlocked(on) {
@@ -186,4 +208,5 @@
   }
 
   setUnlocked(false);
+  updateSystemNotice();
 })();

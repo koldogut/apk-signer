@@ -1,6 +1,6 @@
 # APK Signer Web
 
-Servicio web para inspeccionar APKs y firmarlos con un keystore local. Expone una UI estática y una API REST en `/:8001`.
+Servicio web para inspeccionar APKs y firmarlos con un keystore local. Expone una UI estática y una API REST en `/:8001`, y publica el portal vía nginx en `http://localhost/`.
 
 ## Estado del repositorio
 
@@ -37,7 +37,7 @@ El repositorio incluye el backend, UI, scripts y servicios systemd. Para ejecuta
    curl -s http://localhost:8001/healthz | jq
    ```
 
-Accede a `/admin` para gestionar usuarios y generar nuevos QR MFA (requiere token + MFA del admin).
+Accede a `http://localhost/admin` para gestionar usuarios y generar nuevos QR MFA (requiere token + MFA del admin).
 
 ## Comprobaciones básicas de funcionamiento
 
@@ -45,14 +45,17 @@ Ejecuta estos comandos para confirmar que el servicio web está levantado y sirv
 
 ```bash
 sudo systemctl status apk-signer.service --no-pager
+sudo systemctl status nginx --no-pager
 sudo journalctl -u apk-signer.service -n 200 --no-pager
 ss -tulpn | grep 8001
 curl -s http://localhost:8001/healthz | jq
-curl -I http://localhost:8001/
+curl -I http://localhost/
 ```
 
 Si `/healthz` no responde, revisa permisos de `/opt/apk-signer`, la existencia de `secrets.json` y de `users.json`, y que el servicio `apk-signer` esté activo.
 
 Si necesitas diagnosticar por tu cuenta, revisa estado, logs y el listener del puerto antes de reintentar la instalación.
+
+Si faltan `secrets.json` o el `KeyStore.jks`, el portal mostrará una advertencia y la firma quedará deshabilitada hasta completar esos pasos.
 
 Para más detalles y solución de errores, revisa `docs/INSTALACION.md` y `docs/RESUMEN_ERRORES.md`.

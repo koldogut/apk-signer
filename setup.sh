@@ -33,7 +33,7 @@ install_packages() {
   export DEBIAN_FRONTEND=noninteractive
   log "Instalando dependencias del sistema..."
   apt-get update
-  apt-get install -y git python3 python3-venv python3-pip openjdk-17-jre-headless curl unzip jq ca-certificates rsync
+  apt-get install -y git python3 python3-venv python3-pip openjdk-17-jre-headless curl unzip jq ca-certificates rsync nginx qrencode
 }
 
 cleanup_legacy_install() {
@@ -85,6 +85,10 @@ verify_web_assets() {
 
   if [[ ! -f "${INSTALL_DIR}/static/admin.html" ]]; then
     warn "No se encontró ${INSTALL_DIR}/static/admin.html. El portal de gestión puede no estar disponible."
+  fi
+
+  if [[ ! -f "${INSTALL_DIR}/nginx/apk-signer.conf" ]]; then
+    warn "No se encontró ${INSTALL_DIR}/nginx/apk-signer.conf. nginx no se configurará."
   fi
 }
 
@@ -200,6 +204,22 @@ install_systemd_units() {
   systemctl enable --now apk-signer-cleanup.timer
 }
 
+configure_nginx() {
+  log "Configurando nginx para el portal web..."
+  if [[ -f "${INSTALL_DIR}/nginx/apk-signer.conf" ]]; then
+    cp "${INSTALL_DIR}/nginx/apk-signer.conf" /etc/nginx/sites-available/apk-signer
+    ln -sf /etc/nginx/sites-available/apk-signer /etc/nginx/sites-enabled/apk-signer
+    if [[ -f /etc/nginx/sites-enabled/default ]]; then
+      rm -f /etc/nginx/sites-enabled/default
+    fi
+    nginx -t
+    systemctl enable --now nginx
+    systemctl reload nginx
+  else
+    warn "No se encontró la configuración de nginx en ${INSTALL_DIR}/nginx/apk-signer.conf"
+  fi
+}
+
 check_service() {
   log "Verificando servicio apk-signer..."
   if systemctl is-active --quiet apk-signer.service; then
@@ -261,6 +281,7 @@ ensure_secrets
 update_secrets_paths
 bootstrap_admin_user
 install_systemd_units
+configure_nginx
 check_service
 post_checks
 
