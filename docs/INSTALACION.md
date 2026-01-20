@@ -20,10 +20,11 @@ SDK_ROOT=/opt/android-sdk BUILD_TOOLS_VERSION=34.0.0 sudo bash setup.sh
 
 Después de ejecutar el script:
 
-1. Guarda el token y el QR del administrador MFA que imprime `setup.sh` (necesarios para `/admin`).
-2. Edita `/opt/apk-signer/secrets.json` con alias y contraseñas reales.
-3. Copia tu `KeyStore.jks` a `/opt/apk-signer/keystore/KeyStore.jks`.
-4. Verifica estado:
+1. Acepta las licencias de `sdkmanager` cuando se abra el asistente (usa `y` para aceptar).
+2. Guarda el token y el QR del administrador MFA que imprime `setup.sh` (necesarios para `/admin`).
+3. Edita `/opt/apk-signer/secrets.json` con alias y contraseñas reales.
+4. Copia tu `KeyStore.jks` a `/opt/apk-signer/keystore/KeyStore.jks`.
+5. Verifica estado:
 
 ```bash
 curl -s http://localhost:8001/healthz | jq

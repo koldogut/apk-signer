@@ -17,20 +17,21 @@ El repositorio incluye el backend, UI, scripts y servicios systemd. Para ejecuta
 
 > Nota: el keystore no se incluye en el repo. Debe copiarse localmente y configurarse en `secrets.json`.
 
-## Instalación rápida (con systemd)
+## Instalación rápida (modo sistema con systemd)
 
 1. Clona el repo y ejecuta el instalador (como root). El script usa el código del clon local, no requiere URL adicional:
 
    ```bash
-   git clone https://github.com/koldogut/apk-signer.git
+   git clone https://github.com/tu-org/apk-signer.git
    cd apk-signer
    sudo bash setup.sh
    ```
 
-2. El instalador generará un usuario administrador MFA y mostrará el token + QR para Google Authenticator.
-3. Edita `/opt/apk-signer/secrets.json` con alias y contraseñas reales.
-4. Copia tu `KeyStore.jks` a `/opt/apk-signer/keystore/KeyStore.jks`.
-5. Verifica estado:
+2. Durante la instalación se abrirá el aceptador de licencias de `sdkmanager` (confirma con `y` cuando se solicite).
+3. El instalador generará un usuario administrador MFA y mostrará el token + QR para Google Authenticator.
+4. Edita `/opt/apk-signer/secrets.json` con alias y contraseñas reales.
+5. Copia tu `KeyStore.jks` a `/opt/apk-signer/keystore/KeyStore.jks`.
+6. Verifica estado:
 
    ```bash
    curl -s http://localhost:8001/healthz | jq

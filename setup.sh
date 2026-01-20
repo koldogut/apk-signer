@@ -61,6 +61,16 @@ sync_repo() {
   chown -R "${USER_NAME}:${USER_NAME}" "${INSTALL_DIR}"
 }
 
+verify_web_assets() {
+  if [[ ! -f "${INSTALL_DIR}/static/index.html" ]]; then
+    die "No se encontró ${INSTALL_DIR}/static/index.html. Revisa la sincronización del repo."
+  fi
+
+  if [[ ! -f "${INSTALL_DIR}/static/admin.html" ]]; then
+    warn "No se encontró ${INSTALL_DIR}/static/admin.html. El portal de gestión puede no estar disponible."
+  fi
+}
+
 install_python_deps() {
   log "Creando entorno virtual e instalando dependencias Python..."
   sudo -u "${USER_NAME}" -H python3 -m venv "${INSTALL_DIR}/.venv"
@@ -90,16 +100,20 @@ verify_cmdline_tools() {
   rm -rf "${tmp_dir}"
 }
 
+accept_android_licenses() {
+  log "Se requiere aceptar licencias del Android SDK manualmente."
+  log "Cuando se solicite, escribe 'y' para aceptar todas las licencias."
+  export ANDROID_SDK_ROOT="${SDK_ROOT}"
+  export PATH="${SDK_ROOT}/cmdline-tools/latest/bin:${PATH}"
+  "${SDKMANAGER_BIN}" --licenses
+}
+
 install_android_build_tools() {
   log "Instalando Android build-tools ${BUILD_TOOLS_VERSION}..."
   verify_cmdline_tools
 
   export ANDROID_SDK_ROOT="${SDK_ROOT}"
   export PATH="${SDK_ROOT}/cmdline-tools/latest/bin:${PATH}"
-
-  if ! yes | "${SDKMANAGER_BIN}" --licenses >/dev/null; then
-    warn "No fue posible aceptar todas las licencias automáticamente. Puede ser necesario ejecutar sdkmanager --licenses manualmente."
-  fi
 
   "${SDKMANAGER_BIN}" "platform-tools" "build-tools;${BUILD_TOOLS_VERSION}"
 
@@ -200,7 +214,9 @@ require_root
 install_packages
 ensure_user
 sync_repo
+verify_web_assets
 install_python_deps
+accept_android_licenses
 install_android_build_tools
 prepare_dirs
 ensure_secrets
