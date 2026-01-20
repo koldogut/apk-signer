@@ -189,10 +189,18 @@ check_service() {
     warn "Servicio apk-signer no está activo. Revisa logs con: journalctl -u apk-signer.service -n 200 --no-pager"
   fi
 
+  if ss -tulpn | grep -q ":8001"; then
+    log "Puerto 8001 en escucha."
+  else
+    warn "No se detecta listener en el puerto 8001. Revisa systemd o firewall."
+  fi
+
   if curl -fsS --max-time 5 http://localhost:8001/healthz >/dev/null; then
     log "Healthz OK: http://localhost:8001/healthz"
   else
     warn "Healthz no responde. Revisa el estado del servicio y permisos."
+    warn "Últimos logs del servicio:"
+    journalctl -u apk-signer.service -n 50 --no-pager || true
   fi
 }
 

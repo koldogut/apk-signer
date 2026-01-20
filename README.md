@@ -22,7 +22,7 @@ El repositorio incluye el backend, UI, scripts y servicios systemd. Para ejecuta
 1. Clona el repo y ejecuta el instalador (como root). El script usa el código del clon local, no requiere URL adicional:
 
    ```bash
-   git clone https://github.com/tu-org/apk-signer.git
+   git clone https://github.com/koldogut/apk-signer.git
    cd apk-signer
    sudo bash setup.sh
    ```
@@ -52,5 +52,14 @@ curl -I http://localhost:8001/
 ```
 
 Si `/healthz` no responde, revisa permisos de `/opt/apk-signer`, la existencia de `secrets.json` y de `users.json`, y que el servicio `apk-signer` esté activo.
+
+Si necesitas soporte para diagnosticar, comparte la salida de:
+
+```bash
+sudo systemctl status apk-signer.service --no-pager
+sudo journalctl -u apk-signer.service -n 200 --no-pager
+ss -tulpn | grep 8001
+curl -v http://localhost:8001/healthz
+```
 
 Para más detalles y solución de errores, revisa `docs/INSTALACION.md` y `docs/RESUMEN_ERRORES.md`.
