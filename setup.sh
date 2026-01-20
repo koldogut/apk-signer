@@ -51,6 +51,21 @@ cleanup_legacy_install() {
     log "Eliminando socket legado /run/apk-signer/uvicorn.sock..."
     rm -f "/run/apk-signer/uvicorn.sock"
   fi
+
+  if [[ -f "${INSTALL_DIR}/users.json" ]]; then
+    log "Eliminando credenciales MFA anteriores (${INSTALL_DIR}/users.json)..."
+    rm -f "${INSTALL_DIR}/users.json"
+  fi
+
+  if [[ -f "${INSTALL_DIR}/admin-qr.png" ]]; then
+    log "Eliminando QR admin anterior (${INSTALL_DIR}/admin-qr.png)..."
+    rm -f "${INSTALL_DIR}/admin-qr.png"
+  fi
+
+  if [[ -f "${INSTALL_DIR}/admin-otpauth.txt" ]]; then
+    log "Eliminando OTPAUTH anterior (${INSTALL_DIR}/admin-otpauth.txt)..."
+    rm -f "${INSTALL_DIR}/admin-otpauth.txt"
+  fi
 }
 
 ensure_user() {

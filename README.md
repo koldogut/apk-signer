@@ -28,7 +28,7 @@ El repositorio incluye el backend, UI, scripts y servicios systemd. Para ejecuta
    ```
 
 2. Durante la instalación se abrirá el aceptador de licencias de `sdkmanager` (confirma con `y` cuando se solicite).
-3. El instalador generará un usuario administrador MFA y mostrará el token + QR para Google Authenticator.
+3. El instalador generará un usuario administrador MFA y mostrará el token + QR para Google Authenticator. También guarda `/opt/apk-signer/admin-qr.png` y `/opt/apk-signer/admin-otpauth.txt`, y elimina credenciales MFA anteriores para evitar desincronizaciones.
 4. Edita `/opt/apk-signer/secrets.json` con alias y contraseñas reales.
 5. Copia tu `KeyStore.jks` a `/opt/apk-signer/keystore/KeyStore.jks`.
 6. Verifica estado:
