@@ -18,12 +18,13 @@
     <div class="topbar-actions">
       <button id="btnOpenLogs" class="btn btn-ghost" type="button">Logs</button>
       <a class="btn btn-ghost" href="/healthz" target="_blank" rel="noopener">Health</a>
+      <a class="btn btn-ghost" href="/admin">Gestión usuarios</a>
     </div>
   </header>
 
   <main class="page">
     <section class="grid">
-      <!-- Left: Artefacto + PIN + acciones -->
+      <!-- Left: Artefacto + MFA + acciones -->
       <div class="card">
         <div class="card-header">
           <div class="card-title">Artefacto y firma</div>
@@ -48,10 +49,10 @@
 
           <div class="row-2">
             <div class="field">
-              <div class="field-label">PIN</div>
+              <div class="field-label">Token de usuario</div>
               <div class="pin-wrap">
-                <input id="pinInput" class="input" type="password" inputmode="numeric" autocomplete="off" placeholder="Introduce el PIN" />
-                <button id="togglePin" class="pin-eye" type="button" aria-label="Mostrar/Ocultar PIN">
+                <input id="tokenInput" class="input" type="password" autocomplete="off" placeholder="Token de usuario" />
+                <button id="toggleToken" class="pin-eye" type="button" aria-label="Mostrar/Ocultar token">
                   <!-- ojo (SVG inline para que no “falle la ruta”) -->
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M12 5c5.5 0 9.5 5.2 10 6-.5.8-4.5 6-10 6S2.5 11.8 2 11c.5-.8 4.5-6 10-6zm0 2C7.8 7 4.6 10.6 4 11c.6.4 3.8 4 8 4s7.4-3.6 8-4c-.6-.4-3.8-4-8-4zm0 2.2A1.8 1.8 0 1 1 12 14a1.8 1.8 0 0 1 0-3.6z"></path>
@@ -61,9 +62,14 @@
             </div>
 
             <div class="field">
-              <div class="field-label">Sesión</div>
-              <div class="mono-box" id="sessionBox">—</div>
+              <div class="field-label">Código MFA</div>
+              <input id="mfaInput" class="input" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" />
             </div>
+          </div>
+
+          <div class="field">
+            <div class="field-label">Sesión</div>
+            <div class="mono-box" id="sessionBox">—</div>
           </div>
 
           <div class="btn-row">
