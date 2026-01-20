@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>APK Signer · Gestión MFA</title>
+  <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div class="brand-text">
+        <div class="brand-title">Gestión de usuarios</div>
+        <div class="brand-subtitle">Credenciales MFA para firma</div>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <a class="btn btn-ghost" href="/">Volver</a>
+    </div>
+  </header>
+
+  <main class="page">
+    <div id="systemNotice" class="notice hidden" role="status"></div>
+    <section class="admin-grid">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Acceso administrador</div>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <div class="field-label">Token administrador</div>
+            <input id="adminToken" class="input" type="password" autocomplete="off" placeholder="Token admin" />
+          </div>
+          <div class="field">
+            <div class="field-label">Código MFA admin</div>
+            <input id="adminMfa" class="input" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" />
+          </div>
+          <div class="btn-row">
+            <button id="btnAdminVerify" class="btn btn-primary" type="button">Validar</button>
+            <button id="btnAdminToggle" class="btn" type="button">Mostrar token</button>
+          </div>
+          <div id="adminStatus" class="hint"></div>
+        </div>
+      </div>
+
+      <div class="card" id="adminLocked">
+        <div class="card-header">
+          <div class="card-title">Gestión bloqueada</div>
+        </div>
+        <div class="card-body">
+          <div class="notice">Introduce el token y el MFA del administrador para desbloquear la gestión.</div>
+        </div>
+      </div>
+
+      <div class="card hidden" id="adminContent">
+        <div class="card-header">
+          <div class="card-title">Nuevo usuario</div>
+          <div class="card-actions">
+            <button id="btnRefreshUsers" class="btn btn-ghost" type="button">Actualizar lista</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <div class="field-label">Nombre</div>
+            <input id="newUserName" class="input" type="text" autocomplete="off" placeholder="Nombre del usuario" />
+          </div>
+          <div class="btn-row">
+            <button id="btnCreateUser" class="btn btn-primary" type="button">Crear usuario</button>
+          </div>
+          <div id="userResult" class="result-box hidden">
+            <div class="result-title">Credenciales generadas</div>
+            <div class="result-grid">
+              <div>
+                <div class="field-label">Token usuario</div>
+                <div id="resultToken" class="mono-box"></div>
+              </div>
+              <div>
+                <div class="field-label">Secret MFA</div>
+                <div id="resultSecret" class="mono-box"></div>
+              </div>
+            </div>
+            <div class="field">
+              <div class="field-label">QR MFA</div>
+              <div class="qr-wrap">
+                <img id="resultQr" alt="QR MFA" />
+              </div>
+              <div class="hint" id="resultOtpAuth"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card card-wide hidden" id="usersCard">
+        <div class="card-header">
+          <div class="card-title">Usuarios existentes</div>
+        </div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="table" id="usersTable">
+              <thead>
+                <tr>
+                  <th>Nombre</th>
+                  <th>Rol</th>
+                  <th>Creado</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="usersTbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/js/admin.js"></script>
+</body>
+</html>
