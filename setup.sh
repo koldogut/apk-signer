@@ -167,6 +167,21 @@ install_systemd_units() {
   systemctl enable --now apk-signer-cleanup.timer
 }
 
+check_service() {
+  log "Verificando servicio apk-signer..."
+  if systemctl is-active --quiet apk-signer.service; then
+    log "Servicio apk-signer activo."
+  else
+    warn "Servicio apk-signer no está activo. Revisa logs con: journalctl -u apk-signer.service -n 200 --no-pager"
+  fi
+
+  if curl -fsS --max-time 5 http://localhost:8001/healthz >/dev/null; then
+    log "Healthz OK: http://localhost:8001/healthz"
+  else
+    warn "Healthz no responde. Revisa el estado del servicio y permisos."
+  fi
+}
+
 post_checks() {
   if [[ ! -f "${INSTALL_DIR}/keystore/KeyStore.jks" ]]; then
     warn "No hay keystore en ${INSTALL_DIR}/keystore/KeyStore.jks. Copia un JKS real y ajusta secrets.json."
@@ -192,6 +207,7 @@ ensure_secrets
 update_secrets_paths
 bootstrap_admin_user
 install_systemd_units
+check_service
 post_checks
 
 log "OK. Edita ${INSTALL_DIR}/secrets.json y copia un KeyStore.jks real antes de usar el servicio."

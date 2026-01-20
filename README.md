@@ -38,4 +38,18 @@ El repositorio incluye el backend, UI, scripts y servicios systemd. Para ejecuta
 
 Accede a `/admin` para gestionar usuarios y generar nuevos QR MFA (requiere token + MFA del admin).
 
+## Comprobaciones básicas de funcionamiento
+
+Ejecuta estos comandos para confirmar que el servicio web está levantado y sirviendo la UI:
+
+```bash
+sudo systemctl status apk-signer.service --no-pager
+sudo journalctl -u apk-signer.service -n 200 --no-pager
+ss -tulpn | grep 8001
+curl -s http://localhost:8001/healthz | jq
+curl -I http://localhost:8001/
+```
+
+Si `/healthz` no responde, revisa permisos de `/opt/apk-signer`, la existencia de `secrets.json` y de `users.json`, y que el servicio `apk-signer` esté activo.
+
 Para más detalles y solución de errores, revisa `docs/INSTALACION.md` y `docs/RESUMEN_ERRORES.md`.

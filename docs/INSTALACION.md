@@ -31,6 +31,15 @@ curl -s http://localhost:8001/healthz | jq
 
 El archivo de usuarios MFA se crea en `/opt/apk-signer/users.json` y se administra desde `/admin`.
 
+Comprobaciones adicionales recomendadas:
+
+```bash
+sudo systemctl status apk-signer.service --no-pager
+sudo journalctl -u apk-signer.service -n 200 --no-pager
+ss -tulpn | grep 8001
+curl -I http://localhost:8001/
+```
+
 ## 2) Instalación manual (paso a paso)
 
 ### Dependencias del sistema
