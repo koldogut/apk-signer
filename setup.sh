@@ -5,8 +5,9 @@ INSTALL_DIR="/opt/apk-signer"
 USER_NAME="apk-signer"
 SDK_ROOT="${SDK_ROOT:-/opt/android-sdk}"
 BUILD_TOOLS_VERSION="${BUILD_TOOLS_VERSION:-34.0.0}"
-CMDLINE_ZIP_URL="https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
-CMDLINE_SHA256_URL="https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip.sha256"
+CMDLINE_ZIP_URL="https://dl.google.com/android/repository/commandlinetools-linux-11479570_latest.zip"
+CMDLINE_ZIP_FALLBACK_URL="https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+CMDLINE_SHA256_URL="${CMDLINE_SHA256_URL:-}"
 SDKMANAGER_BIN="${SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -106,10 +107,29 @@ verify_cmdline_tools() {
 
   log "Descargando Android command line tools..."
   local tmp_dir
+  local download_url=""
+  local sha_url=""
   tmp_dir="$(mktemp -d)"
-  curl -L -o "${tmp_dir}/cmdline-tools.zip" "${CMDLINE_ZIP_URL}"
 
-  if curl -fsSL -o "${tmp_dir}/cmdline-tools.sha256" "${CMDLINE_SHA256_URL}"; then
+  for url in "${CMDLINE_ZIP_URL}" "${CMDLINE_ZIP_FALLBACK_URL}"; do
+    if curl -fL -o "${tmp_dir}/cmdline-tools.zip" "${url}"; then
+      download_url="${url}"
+      break
+    fi
+    warn "No se pudo descargar command line tools desde ${url}"
+  done
+
+  if [[ -z "${download_url}" ]]; then
+    die "No se pudo descargar command line tools. Configura CMDLINE_ZIP_URL y vuelve a ejecutar."
+  fi
+
+  if [[ -n "${CMDLINE_SHA256_URL}" ]]; then
+    sha_url="${CMDLINE_SHA256_URL}"
+  else
+    sha_url="${download_url}.sha256"
+  fi
+
+  if curl -fsSL -o "${tmp_dir}/cmdline-tools.sha256" "${sha_url}"; then
     (cd "${tmp_dir}" && sha256sum -c cmdline-tools.sha256) || die "Checksum inválido para command line tools"
   else
     warn "No se pudo descargar checksum para command line tools (continuando)"
