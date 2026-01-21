@@ -34,6 +34,7 @@ install_packages() {
   export DEBIAN_FRONTEND=noninteractive
   log "Instalando dependencias del sistema..."
   apt-get update
+  mkdir -p /var/log/chrony
   apt-get install -y git python3 python3-venv python3-pip openjdk-17-jre curl unzip zip jq ca-certificates rsync nginx qrencode iproute2 chrony
 }
 
