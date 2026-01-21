@@ -33,7 +33,7 @@ install_packages() {
   export DEBIAN_FRONTEND=noninteractive
   log "Instalando dependencias del sistema..."
   apt-get update
-  apt-get install -y git python3 python3-venv python3-pip openjdk-17-jre-headless curl unzip jq ca-certificates rsync nginx qrencode
+  apt-get install -y git python3 python3-venv python3-pip openjdk-17-jre curl unzip zip jq ca-certificates rsync nginx qrencode iproute2
 }
 
 cleanup_legacy_install() {
@@ -117,13 +117,20 @@ verify_cmdline_tools() {
 
   mkdir -p "${SDK_ROOT}/cmdline-tools"
   unzip -q "${tmp_dir}/cmdline-tools.zip" -d "${SDK_ROOT}/cmdline-tools"
-  mv "${SDK_ROOT}/cmdline-tools/cmdline-tools" "${SDK_ROOT}/cmdline-tools/latest"
+  if [[ -d "${SDK_ROOT}/cmdline-tools/cmdline-tools" ]]; then
+    mv "${SDK_ROOT}/cmdline-tools/cmdline-tools" "${SDK_ROOT}/cmdline-tools/latest"
+  fi
   rm -rf "${tmp_dir}"
+
+  if [[ ! -x "${SDKMANAGER_BIN}" ]]; then
+    die "No se encontró sdkmanager en ${SDKMANAGER_BIN}. Revisa la descarga de command line tools."
+  fi
 }
 
 accept_android_licenses() {
   log "Se requiere aceptar licencias del Android SDK manualmente."
   log "Cuando se solicite, escribe 'y' para aceptar todas las licencias."
+  verify_cmdline_tools
   export ANDROID_SDK_ROOT="${SDK_ROOT}"
   export PATH="${SDK_ROOT}/cmdline-tools/latest/bin:${PATH}"
   "${SDKMANAGER_BIN}" --licenses
