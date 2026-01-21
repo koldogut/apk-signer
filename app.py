@@ -516,7 +516,15 @@ def sign_ep():
 
     if not (check_bin(APKSIGNER_JAR) and check_bin(KEYSTORE_PATH)):
         err = "apksigner.jar o keystore no configurados"
-        log_event("sign", ok=False, sessionId=sid, filename=meta.get("originalName", ""), error=err)
+        log_event(
+            "sign",
+            ok=False,
+            sessionId=sid,
+            filename=meta.get("originalName", ""),
+            error=err,
+            userId=user.get("id", ""),
+            userName=user.get("name", ""),
+        )
         return jsonify({"ok": False, "error": err}), 500
 
     args = [
@@ -538,7 +546,16 @@ def sign_ep():
 
     if rc != 0:
         msg = (err or out or f"Fallo firmando (rc={rc})").strip()
-        log_event("sign", ok=False, sessionId=sid, filename=meta.get("originalName", ""), ms=dt_ms, error=msg)
+        log_event(
+            "sign",
+            ok=False,
+            sessionId=sid,
+            filename=meta.get("originalName", ""),
+            ms=dt_ms,
+            error=msg,
+            userId=user.get("id", ""),
+            userName=user.get("name", ""),
+        )
         return jsonify({"ok": False, "error": msg, "stdout": out, "stderr": err}), 200
 
     # apksigner suele no imprimir nada en OK
@@ -546,6 +563,10 @@ def sign_ep():
     meta["signedName"] = signed_name
     meta["signedOk"] = True
     meta["verifiedOk"] = False
+    meta["signedBy"] = {
+        "id": user.get("id", ""),
+        "name": user.get("name", ""),
+    }
     save_session_meta(sid, meta)
 
     log_event(
@@ -556,6 +577,7 @@ def sign_ep():
         ms=dt_ms,
         signedName=signed_name,
         userId=user.get("id", ""),
+        userName=user.get("name", ""),
     )
 
     return jsonify({
@@ -594,6 +616,7 @@ def verify_ep():
         "verify", "--verbose", "--print-certs",
         str(signed_path),
     ]
+    signed_by = meta.get("signedBy") or {}
 
     t0 = time.time()
     rc, out, err = run_cmd(args, timeout=120)
@@ -603,12 +626,29 @@ def verify_ep():
         msg = (err or out or f"Verificación fallida (rc={rc})").strip()
         meta["verifiedOk"] = False
         save_session_meta(sid, meta)
-        log_event("verify", ok=False, sessionId=sid, filename=meta.get("signedName", ""), ms=dt_ms, error=msg)
+        log_event(
+            "verify",
+            ok=False,
+            sessionId=sid,
+            filename=meta.get("signedName", ""),
+            ms=dt_ms,
+            error=msg,
+            userId=signed_by.get("id", ""),
+            userName=signed_by.get("name", ""),
+        )
         return jsonify({"ok": False, "error": msg, "stdout": out, "stderr": err}), 200
 
     meta["verifiedOk"] = True
     save_session_meta(sid, meta)
-    log_event("verify", ok=True, sessionId=sid, filename=meta.get("signedName", ""), ms=dt_ms)
+    log_event(
+        "verify",
+        ok=True,
+        sessionId=sid,
+        filename=meta.get("signedName", ""),
+        ms=dt_ms,
+        userId=signed_by.get("id", ""),
+        userName=signed_by.get("name", ""),
+    )
 
     return jsonify({"ok": True, "message": "Verificación correcta", "stdout": out, "stderr": err}), 200
 
@@ -628,7 +668,15 @@ def download_ep(sid: str):
     if not signed_path.exists():
         abort(404)
 
-    log_event("download", ok=True, sessionId=sid, filename=meta.get("signedName", ""))
+    signed_by = meta.get("signedBy") or {}
+    log_event(
+        "download",
+        ok=True,
+        sessionId=sid,
+        filename=meta.get("signedName", ""),
+        userId=signed_by.get("id", ""),
+        userName=signed_by.get("name", ""),
+    )
     return send_file(
         signed_path,
         as_attachment=True,
