@@ -51,21 +51,6 @@ cleanup_legacy_install() {
     log "Eliminando socket legado /run/apk-signer/uvicorn.sock..."
     rm -f "/run/apk-signer/uvicorn.sock"
   fi
-
-  if [[ -f "${INSTALL_DIR}/users.json" ]]; then
-    log "Eliminando credenciales MFA anteriores (${INSTALL_DIR}/users.json)..."
-    rm -f "${INSTALL_DIR}/users.json"
-  fi
-
-  if [[ -f "${INSTALL_DIR}/admin-qr.png" ]]; then
-    log "Eliminando QR admin anterior (${INSTALL_DIR}/admin-qr.png)..."
-    rm -f "${INSTALL_DIR}/admin-qr.png"
-  fi
-
-  if [[ -f "${INSTALL_DIR}/admin-otpauth.txt" ]]; then
-    log "Eliminando OTPAUTH anterior (${INSTALL_DIR}/admin-otpauth.txt)..."
-    rm -f "${INSTALL_DIR}/admin-otpauth.txt"
-  fi
 }
 
 ensure_user() {
@@ -271,10 +256,6 @@ check_service() {
 post_checks() {
   if [[ ! -f "${INSTALL_DIR}/keystore/KeyStore.jks" ]]; then
     warn "No hay keystore en ${INSTALL_DIR}/keystore/KeyStore.jks. Copia un JKS real y ajusta secrets.json."
-  fi
-
-  if [[ ! -f "${INSTALL_DIR}/admin-otpauth.txt" ]]; then
-    warn "No se encontró ${INSTALL_DIR}/admin-otpauth.txt. Ejecuta tools/bootstrap_users.py para regenerar el QR."
   fi
 
   if [[ ! -x "${INSTALL_DIR}/tools/aapt2" ]]; then
