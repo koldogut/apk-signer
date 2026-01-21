@@ -18,31 +18,37 @@
 
 **Solución:** revisa `secrets.json` y permisos de lectura.
 
-## 4) Error "MFA incorrecto"
+## 4) Error "Failed to obtain key with alias ..." / "UnrecoverableKeyException: Cannot recover key"
+
+**Causa:** el alias es correcto pero la contraseña de la clave privada (`KEY_PASS`) no coincide con la del keystore o con la definida en el alias.
+
+**Solución:** valida que `KEY_ALIAS` exista en el keystore y revisa en `secrets.json` que `KS_PASS` (contraseña del keystore) y `KEY_PASS` (contraseña de la clave) sean las correctas. Si el alias existe y puedes listar el keystore, normalmente el problema es `KEY_PASS` o un alias distinto.
+
+## 5) Error "MFA incorrecto"
 
 **Causa:** el token de usuario o el código MFA no son válidos.
 
 **Solución:** verifica que el usuario existe en `/opt/apk-signer/users.json`, que el token sea el correcto y que el MFA sea el actual.
 
-## 5) Error "No existe users.json"
+## 6) Error "No existe users.json"
 
 **Causa:** no se ejecutó el bootstrap de usuarios durante la instalación.
 
 **Solución:** ejecuta `sudo -u apk-signer /opt/apk-signer/.venv/bin/python /opt/apk-signer/tools/bootstrap_users.py`.
 
-## 6) Error "Input APK no existe" o "Sesión no encontrada"
+## 7) Error "Input APK no existe" o "Sesión no encontrada"
 
 **Causa:** la sesión expiró o se borró por el cleanup.
 
 **Solución:** vuelve a subir el APK y firma de nuevo.
 
-## 7) `java -version` falla
+## 8) `java -version` falla
 
 **Causa:** Java no instalado.
 
 **Solución:** `sudo apt-get install -y openjdk-17-jre-headless`.
 
-## 8) Problemas de permisos en `/opt/apk-signer`
+## 9) Problemas de permisos en `/opt/apk-signer`
 
 **Causa:** archivos creados con otro usuario.
 
@@ -52,7 +58,7 @@
 sudo chown -R apk-signer:apk-signer /opt/apk-signer
 ```
 
-## 9) `sdkmanager` no acepta licencias
+## 10) `sdkmanager` no acepta licencias
 
 **Causa:** el entorno no permite aceptar licencias de Android SDK automáticamente.
 
