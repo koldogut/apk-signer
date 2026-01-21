@@ -34,7 +34,7 @@ install_packages() {
   export DEBIAN_FRONTEND=noninteractive
   log "Instalando dependencias del sistema..."
   apt-get update
-  apt-get install -y git python3 python3-venv python3-pip openjdk-17-jre curl unzip zip jq ca-certificates rsync nginx qrencode iproute2
+  apt-get install -y git python3 python3-venv python3-pip openjdk-17-jre curl unzip zip jq ca-certificates rsync nginx qrencode iproute2 chrony
 }
 
 cleanup_legacy_install() {
@@ -186,6 +186,33 @@ ensure_secrets() {
   fi
 }
 
+ensure_time_sync() {
+  log "Verificando sincronización horaria..."
+  if systemctl list-unit-files chrony.service >/dev/null 2>&1; then
+    systemctl enable --now chrony || warn "No se pudo iniciar chrony"
+  elif systemctl list-unit-files systemd-timesyncd.service >/dev/null 2>&1; then
+    systemctl enable --now systemd-timesyncd || warn "No se pudo iniciar systemd-timesyncd"
+  else
+    warn "No se encontró un servicio de sincronización horaria disponible"
+    return
+  fi
+
+  if command -v chronyc >/dev/null 2>&1; then
+    if chronyc tracking >/dev/null 2>&1; then
+      log "Sincronización horaria verificada con chrony."
+    else
+      warn "Chrony no reporta sincronización. Revisa chronyc tracking."
+    fi
+    return
+  fi
+
+  if timedatectl show -p NTPSynchronized --value 2>/dev/null | grep -q "yes"; then
+    log "Sincronización horaria verificada con timedatectl."
+  else
+    warn "Timedatectl no reporta NTP sincronizado. Revisa timedatectl status."
+  fi
+}
+
 bootstrap_admin_user() {
   log "Generando usuario administrador MFA..."
   sudo -u "${USER_NAME}" -H "${INSTALL_DIR}/.venv/bin/python" "${INSTALL_DIR}/tools/bootstrap_users.py"
@@ -307,6 +334,7 @@ prepare_dirs
 ensure_secrets
 update_secrets_paths
 bootstrap_admin_user
+ensure_time_sync
 install_systemd_units
 configure_nginx
 check_service
