@@ -51,7 +51,7 @@ Si ves errores 413 al subir APKs, revisa el límite `client_max_body_size` en la
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y git python3 python3-venv python3-pip openjdk-17-jre-headless curl unzip jq ca-certificates rsync nginx qrencode
+sudo apt-get install -y git python3 python3-venv python3-pip openjdk-17-jre curl unzip zip jq ca-certificates rsync nginx qrencode iproute2 chrony
 ```
 
 ### Android Build Tools (aapt2 + apksigner.jar)
