@@ -445,10 +445,14 @@
         const fname = evt.filename || evt.signedName || "";
         const integrity = evt._integrity || "—";
         const ip = evt.ip || "";
+        const userName = evt.userName || "";
+        const userId = evt.userId || "";
+        const userLabel = userName ? `${userName}${userId ? ` (${userId})` : ""}` : (userId || "—");
 
         tr.innerHTML = `
           <td class="mono">${escapeHtml(dt)}</td>
           <td>${escapeHtml(action)}</td>
+          <td>${escapeHtml(userLabel)}</td>
           <td>${badge(ok ? "OK" : "KO", ok ? "ok" : "bad")}</td>
           <td class="mono">${escapeHtml(fname)}</td>
           <td>${badge(integrity, integrityClass(integrity))}</td>
@@ -460,7 +464,7 @@
     } catch (e) {
       dbg("LOGS error", { message: e.message });
       const tr = document.createElement("tr");
-      tr.innerHTML = `<td colspan="6">No se pueden cargar logs: ${escapeHtml(e.message || "")}</td>`;
+      tr.innerHTML = `<td colspan="7">No se pueden cargar logs: ${escapeHtml(e.message || "")}</td>`;
       logsTbody.appendChild(tr);
       await healthzDebug();
     }
