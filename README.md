@@ -61,3 +61,19 @@ Si faltan `secrets.json` o el `KeyStore.jks`, el portal mostrará una advertenci
 Si ves errores 413 al subir APKs, revisa el límite `client_max_body_size` en la configuración de nginx.
 
 Para más detalles y solución de errores, revisa `docs/INSTALACION.md` y `docs/RESUMEN_ERRORES.md`.
+
+## Capturas de la aplicación
+
+A continuación se muestran capturas representativas del flujo completo de instalación, firma y gestión de usuarios:
+
+1. **Setup inicial con MFA**: token de administrador y QR generado durante `setup.sh`.
+
+   ![Token y QR inicial del administrador](png/admin-token.png)
+
+2. **Flujo de firma principal**: pantalla de firma con resultado y verificación posterior.
+
+   ![Pantalla principal de firma y verificación](png/firma.png)
+
+3. **Gestión de usuarios**: creación de un usuario nuevo desde el panel administrativo.
+
+   ![Creación de usuario nuevo](png/user-man.png)
