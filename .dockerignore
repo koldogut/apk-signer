@@ -1,0 +1,14 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+work
+logs
+keystore
+secrets.json
+users.json
+android-sdk
+png

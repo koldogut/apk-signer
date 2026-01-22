@@ -1,0 +1,13 @@
+services:
+  apk-signer:
+    build: .
+    container_name: apk-signer
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./keystore:/opt/apk-signer/keystore
+      - ./secrets.json:/opt/apk-signer/secrets.json
+      - ./users.json:/opt/apk-signer/users.json
+      - ./work:/opt/apk-signer/work
+      - ./logs:/opt/apk-signer/logs
+    restart: unless-stopped
