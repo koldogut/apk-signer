@@ -77,3 +77,45 @@ A continuación se muestran capturas representativas del flujo completo de insta
 3. **Gestión de usuarios**: creación de un usuario nuevo desde el panel administrativo.
 
    ![Creación de usuario nuevo](png/user-man.png)
+
+## Ejecución en Docker (con volúmenes persistentes)
+
+1. Construye la imagen:
+
+   ```bash
+   docker compose build
+   ```
+
+2. Crea las carpetas locales que se persistirán en el host:
+
+   ```bash
+   mkdir -p keystore work logs
+   ```
+
+3. Copia el ejemplo de secretos y edítalo:
+
+   ```bash
+   cp secrets.example.json secrets.json
+   ```
+
+   Ajusta rutas en `secrets.json` para apuntar a `/opt/apk-signer/...` (ya vienen así en el ejemplo).
+
+4. Deposita tu `KeyStore.jks` en `./keystore/KeyStore.jks` y completa alias + contraseñas reales en `secrets.json`.
+
+5. Genera `users.json` si aún no existe:
+
+   ```bash
+   python3 tools/bootstrap_users.py
+   ```
+
+6. Levanta el servicio:
+
+   ```bash
+   docker compose up
+   ```
+
+El `Dockerfile` ya instala el SDK de Android y los Build Tools dentro de la imagen (aapt2 y apksigner.jar), por lo que no necesitas preparar `android-sdk` en el host. Si quieres reutilizar un SDK local, puedes montar un volumen adicional a `/opt/android-sdk` en `docker-compose.yml`.
+
+El `docker-compose.yml` monta `./keystore` y `./secrets.json` para que el usuario pueda gestionar el keystore y los secretos desde el host. También persiste `work`, `logs` y `users.json` en el directorio local del repo.
+
+La aplicación (scripts, `app.py` y HTML estático de `static/`) se incluye en la imagen a través del `Dockerfile` con `COPY . /opt/apk-signer`, por lo que el build empaqueta el código del repo; el `docker-compose.yml` solo se encarga de publicar el puerto y montar los volúmenes persistentes.
