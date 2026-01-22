@@ -17,42 +17,6 @@ El repositorio incluye el backend, UI, scripts y servicios systemd. Para ejecuta
 
 > Nota: el keystore no se incluye en el repo. Debe copiarse localmente y configurarse en `secrets.json`.
 
-## Ejecución en Docker (con volúmenes persistentes)
-
-1. Copia el ejemplo de secretos y edítalo:
-
-   ```bash
-   cp secrets.example.json secrets.json
-   ```
-
-   Ajusta rutas en `secrets.json` para apuntar a `/opt/apk-signer/...` (ya vienen así en el ejemplo).
-
-2. Crea las carpetas locales que se persistirán en el host:
-
-   ```bash
-   mkdir -p keystore work logs
-   ```
-
-3. Deposita tu `KeyStore.jks` en `./keystore/KeyStore.jks` y completa alias + contraseñas reales en `secrets.json`.
-
-4. Genera `users.json` si aún no existe:
-
-   ```bash
-   python3 tools/bootstrap_users.py
-   ```
-
-5. Levanta el servicio:
-
-   ```bash
-   docker compose up --build
-   ```
-
-El `Dockerfile` ya instala el SDK de Android y los Build Tools dentro de la imagen (aapt2 y apksigner.jar), por lo que no necesitas preparar `android-sdk` en el host. Si quieres reutilizar un SDK local, puedes montar un volumen adicional a `/opt/android-sdk` en `docker-compose.yml`.
-
-El `docker-compose.yml` monta `./keystore` y `./secrets.json` para que el usuario pueda gestionar el keystore y los secretos desde el host. También persiste `work`, `logs` y `users.json` en el directorio local del repo.
-
-La aplicación (scripts, `app.py` y HTML estático de `static/`) se incluye en la imagen a través del `Dockerfile` con `COPY . /opt/apk-signer`, por lo que el build empaqueta el código del repo; el `docker-compose.yml` solo se encarga de publicar el puerto y montar los volúmenes persistentes.
-
 ## Instalación rápida (modo sistema con systemd)
 
 1. Clona el repo y ejecuta el instalador (como root). El script usa el código del clon local, no requiere URL adicional:
