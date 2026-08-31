@@ -6,6 +6,14 @@ El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1
 y el proyecto sigue [Semantic Versioning](https://semver.org/lang/es/).
 
 ## [Unreleased]
+### Fixed
+- El `Dockerfile` arrastraba el mismo fallo de `zipalign` que `setup.sh`: copiaba el binario fuera del SDK, donde no encuentra `libc++.so`. Ya no se copia, y la imagen pasa a Build Tools 35 para poder alinear a 16 KB.
+
+### Documentation
+- `docs/INSTALACION.md` reescrito: seguía describiendo la versión anterior (HTTP sin TLS, Python 3.9, sin `zipalign` ni actualización) y su apartado de instalación manual recomendaba copiar las herramientas a `/opt/apk-signer/tools/`, que es justo lo que rompe `zipalign`.
+- Entrada 19 de `RESUMEN_ERRORES.md` corregida por el mismo motivo.
+- La sección de Docker del README advierte de dos cosas que faltaban: que hay que generar `LOG_HMAC_KEY` a mano (el flujo de Docker no ejecuta `setup.sh`, así que la traza quedaba sin sellar) y que ese despliegue no lleva TLS.
+
 ### Added
 - Alineado a página de 16 KB (`zipalign -P 16`), que es lo que exige Android 15+ para librerías nativas sin comprimir. El `-p` clásico solo alinea a 4 KB. Configurable con `ZIPALIGN_PAGE_KB`; el valor efectivo se informa en `/healthz` (`zipalign_page_kb`) y en la respuesta de firma (`alignPageKb`).
 - Detección de capacidad: `-P` solo existe desde Build Tools 35. Si el binario instalado no lo admite, se degrada a 4 KB avisando en el `warning` de la firma, en vez de fallar. `-P` y `-p` son excluyentes, así que se pasa uno u otro.

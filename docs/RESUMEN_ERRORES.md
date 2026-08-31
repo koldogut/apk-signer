@@ -137,12 +137,18 @@ Si el 429 llega sin haber fallado nada, es el rate limiting de nginx: revisa `li
 
 **Causa:** `ZIPALIGN` no está en `secrets.json`, el binario no existe, o `zipalign` devolvió error.
 
-**Solución:** comprueba `zipalign_exists` en `/healthz`. Reinstala build-tools o copia el binario y actualiza `secrets.json`:
+**Solución:** comprueba `zipalign_exists` en `/healthz` y apunta `ZIPALIGN` al binario **dentro del SDK**:
 
 ```bash
-sudo -u apk-signer install -m 0755 \
-  /opt/android-sdk/build-tools/34.0.0/zipalign /opt/apk-signer/tools/zipalign
+ls -l /opt/android-sdk/build-tools/*/zipalign
+sudo -u apk-signer jq '.ZIPALIGN="/opt/android-sdk/build-tools/35.0.0/zipalign"' \
+  /opt/apk-signer/secrets.json > /tmp/s.json && sudo mv /tmp/s.json /opt/apk-signer/secrets.json
+sudo chown apk-signer:apk-signer /opt/apk-signer/secrets.json
+sudo chmod 600 /opt/apk-signer/secrets.json
+sudo systemctl restart apk-signer
 ```
+
+> **No copies `zipalign` fuera del SDK**: enlaza contra `lib64/libc++.so` y ahí falla (ver entrada 26). `update.sh` ya deja la ruta correcta.
 
 ## 20) El servicio no arranca tras endurecer systemd
 

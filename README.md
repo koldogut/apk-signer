@@ -4,7 +4,13 @@ Servicio web para inspeccionar APKs y firmarlos con un keystore local. Expone un
 
 ## Estado del repositorio
 
-El repositorio incluye el backend, UI, scripts y servicios systemd. Para ejecutar en Debian/Ubuntu se requiere instalar dependencias del sistema, Android Build Tools (`aapt2`/`apksigner.jar`) y un keystore real. El script `setup.sh` ahora descarga e instala automáticamente los Build Tools públicos y configura rutas por defecto.
+El repositorio incluye el backend, la UI, los scripts de despliegue y las unidades de systemd.
+
+* `setup.sh` instala desde cero: dependencias del sistema, Android Build Tools (`aapt2`, `apksigner.jar`, `zipalign`), certificado TLS, usuario administrador MFA y servicios.
+* `update.sh` actualiza una instalación existente conservando la configuración y los datos, con copia de seguridad y reversión automática.
+* Lo único que hay que aportar es un **keystore JKS real**: no se incluye en el repo y debe copiarse a mano.
+
+El código está separado en `config` / `audit` / `auth` / `signing` / `app`, con 100 tests y CI que cubre tests, `ruff`, `bandit`, `pip-audit` y la validación de la configuración de nginx.
 
 ## Requisitos
 
@@ -292,19 +298,28 @@ A continuación se muestran capturas representativas del flujo completo de insta
 
 4. Deposita tu `KeyStore.jks` en `./keystore/KeyStore.jks` y completa alias + contraseñas reales en `secrets.json`.
 
-5. Genera `users.json` si aún no existe:
+5. **Genera la clave de sellado de la traza.** A diferencia de `setup.sh`, el flujo de Docker no la crea por ti, y sin ella los eventos se registran sin MAC:
+
+   ```bash
+   python3 -c "import os; print(os.urandom(32).hex())"
+   # copiar el valor a LOG_HMAC_KEY en secrets.json
+   ```
+
+6. Genera `users.json` si aún no existe:
 
    ```bash
    python3 tools/bootstrap_users.py
    ```
 
-6. Levanta el servicio:
+7. Levanta el servicio:
 
    ```bash
    docker compose up
    ```
 
-El `Dockerfile` ya instala el SDK de Android y los Build Tools dentro de la imagen (aapt2 y apksigner.jar), por lo que no necesitas preparar `android-sdk` en el host. Si quieres reutilizar un SDK local, puedes montar un volumen adicional a `/opt/android-sdk` en `docker-compose.yml`.
+El `Dockerfile` instala el SDK de Android y los Build Tools 35 dentro de la imagen. `aapt2` y `apksigner.jar` se copian a `/opt/apk-signer/tools/`; **`zipalign` se queda dentro del SDK** porque enlaza contra `lib64/libc++.so` y fuera de ahí no arranca, así que `ZIPALIGN` apunta a `/opt/android-sdk/build-tools/35.0.0/zipalign` (ya viene así en el ejemplo). Si montas un SDK del host en `/opt/android-sdk`, ajusta esa ruta a la versión que tengas.
+
+> **El despliegue con Docker no lleva TLS.** `docker-compose.yml` publica el 8001 en claro, sin nginx delante. El token y el código MFA viajarían sin cifrar: para cualquier uso más allá de pruebas, pon un proxy inverso con TLS delante o usa el despliegue con systemd, que sí lo configura.
 
 El `docker-compose.yml` monta `./keystore` y `./secrets.json` para que el usuario pueda gestionar el keystore y los secretos desde el host. También persiste `work`, `logs` y `users.json` en el directorio local del repo.
 

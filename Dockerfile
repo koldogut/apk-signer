@@ -4,7 +4,8 @@ ENV APP_HOME=/opt/apk-signer \
     ANDROID_SDK_ROOT=/opt/android-sdk \
     PYTHONUNBUFFERED=1
 
-ARG BUILD_TOOLS_VERSION=34.0.0
+# 35 es la primera version cuyo zipalign admite -P (alineado a 16 KB).
+ARG BUILD_TOOLS_VERSION=35.0.0
 ARG CMDLINE_ZIP_URL=https://dl.google.com/android/repository/commandlinetools-linux-11479570_latest.zip
 
 WORKDIR ${APP_HOME}
@@ -30,8 +31,11 @@ RUN mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools" \
         "build-tools;${BUILD_TOOLS_VERSION}" \
     && mkdir -p "${APP_HOME}/tools" \
     && cp "${ANDROID_SDK_ROOT}/build-tools/${BUILD_TOOLS_VERSION}/aapt2" "${APP_HOME}/tools/aapt2" \
-    && cp "${ANDROID_SDK_ROOT}/build-tools/${BUILD_TOOLS_VERSION}/lib/apksigner.jar" "${APP_HOME}/tools/apksigner.jar" \
-    && cp "${ANDROID_SDK_ROOT}/build-tools/${BUILD_TOOLS_VERSION}/zipalign" "${APP_HOME}/tools/zipalign"
+    && cp "${ANDROID_SDK_ROOT}/build-tools/${BUILD_TOOLS_VERSION}/lib/apksigner.jar" "${APP_HOME}/tools/apksigner.jar"
+# zipalign NO se copia: enlaza dinamicamente contra lib64/libc++.so y fuera de
+# su directorio del SDK falla con "error while loading shared libraries".
+# secrets.example.json ya apunta ZIPALIGN a la ruta dentro de ANDROID_SDK_ROOT.
+# aapt2 si se puede copiar porque va enlazado estaticamente.
 
 COPY requirements.txt ${APP_HOME}/requirements.txt
 RUN pip install --no-cache-dir -r ${APP_HOME}/requirements.txt
