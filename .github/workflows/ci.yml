@@ -16,9 +16,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 3.11 es el minimo declarado (y el del Dockerfile); 3.12 vigila que
-        # no se rompa nada con la siguiente.
-        python-version: ["3.11", "3.12"]
+        # 3.11 es el minimo declarado; 3.14 es lo que trae Ubuntu 26.04 y lo
+        # que usa la imagen de Docker, asi que tiene que estar cubierto: no se
+        # puede desplegar sobre una version que el CI no prueba.
+        python-version: ["3.11", "3.12", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

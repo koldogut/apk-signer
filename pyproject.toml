@@ -14,13 +14,14 @@ ignore = [
   "E501",    # el limite de linea lo controla line-length, sin fallar por comentarios largos
   "S603",    # subprocess con lista de argumentos: es exactamente lo que se quiere aqui
   "S404",    # importar subprocess es inevitable en un firmador
-  "UP038",   # isinstance con tuplas sigue siendo mas legible
   # Modernizacion de tipado pendiente para una limpieza aparte: typing.Dict/List
   # -> dict/list (UP006/UP035), Optional[X] -> X | None (UP007) y timezone.utc ->
   # datetime.UTC (UP017). Son ~70 cambios cosmeticos que no pintan nada en una
   # rama de seguridad, y aplicarlos ata el codigo a 3.10+/3.11+ en tiempo de
   # ejecucion, no solo en las anotaciones.
-  "UP006", "UP035", "UP007", "UP017",
+  # UP045 aparece con ruff 0.16: la regla UP007 se partio en dos y el caso
+  # Optional[X] -> X | None se movio al codigo nuevo.
+  "UP006", "UP035", "UP007", "UP017", "UP045",
   # try/except/pass y /continue son deliberados en las rutas best-effort: la
   # traza y el mantenimiento no pueden tumbar una firma en curso.
   "S110", "S112",
