@@ -299,3 +299,9 @@ Comprueba después `zipalign_page_kb` en `/healthz` (debe ser 16) y que una firm
 Para volver al comportamiento antiguo, pon `ZIPALIGN_PAGE_KB: 4` en `secrets.json` (o `0` para usar el `-p` clásico).
 
 > El servicio elige los argumentos según lo que soporte el binario instalado.
+
+## 31) Aparece `/opt/apk-signer/.gunicorn/gunicorn.ctl`
+
+**Causa:** desde gunicorn 26 el proceso maestro abre un socket de control local. Se crea al arrancar el servicio.
+
+**Qué hacer:** nada. El socket queda en modo `0600` propiedad de `apk-signer`, dentro de un directorio `0700`, y se recrea en cada arranque. `update.sh` lo excluye de la copia de seguridad.

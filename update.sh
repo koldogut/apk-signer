@@ -59,6 +59,7 @@ make_backup() {
   tar -czf "${BACKUP_PATH}" \
     --exclude="./work/sessions" \
     --exclude="./.venv" \
+    --exclude="./.gunicorn" \
     -C "${INSTALL_DIR}" . 2>/dev/null || die "No se pudo crear la copia de seguridad."
   chmod 0600 "${BACKUP_PATH}"
 
