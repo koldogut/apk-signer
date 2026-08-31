@@ -251,7 +251,7 @@ APK_SIGNER_DEV_HOST=0.0.0.0 python app.py      # accesible desde la red
 
 ## Solución de problemas
 
-[docs/RESUMEN_ERRORES.md](docs/RESUMEN_ERRORES.md) recoge 30 problemas conocidos con su causa y su remedio.
+[docs/RESUMEN_ERRORES.md](docs/RESUMEN_ERRORES.md) recoge 31 problemas conocidos con su causa y su remedio.
 
 ## Capturas
 

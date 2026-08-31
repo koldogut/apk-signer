@@ -6,96 +6,56 @@ El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1
 y el proyecto sigue [Semantic Versioning](https://semver.org/lang/es/).
 
 ## [Unreleased]
-### Fixed
-- El `Dockerfile` arrastraba el mismo fallo de `zipalign` que `setup.sh`: copiaba el binario fuera del SDK, donde no encuentra `libc++.so`. Ya no se copia, y la imagen pasa a Build Tools 35 para poder alinear a 16 KB.
 
-### Documentation
-- `docs/INSTALACION.md` reescrito: seguía describiendo la versión anterior (HTTP sin TLS, Python 3.9, sin `zipalign` ni actualización) y su apartado de instalación manual recomendaba copiar las herramientas a `/opt/apk-signer/tools/`, que es justo lo que rompe `zipalign`.
-- Entrada 19 de `RESUMEN_ERRORES.md` corregida por el mismo motivo.
-- La sección de Docker del README advierte de dos cosas que faltaban: que hay que generar `LOG_HMAC_KEY` a mano (el flujo de Docker no ejecuta `setup.sh`, así que la traza quedaba sin sellar) y que ese despliegue no lleva TLS.
+## [2.0.0] - 2026-08-31
 
-### Added
-- Alineado a página de 16 KB (`zipalign -P 16`), que es lo que exige Android 15+ para librerías nativas sin comprimir. El `-p` clásico solo alinea a 4 KB. Configurable con `ZIPALIGN_PAGE_KB`; el valor efectivo se informa en `/healthz` (`zipalign_page_kb`) y en la respuesta de firma (`alignPageKb`).
-- Detección de capacidad: `-P` solo existe desde Build Tools 35. Si el binario instalado no lo admite, se degrada a 4 KB avisando en el `warning` de la firma, en vez de fallar. `-P` y `-p` son excluyentes, así que se pasa uno u otro.
-- `BUILD_TOOLS_VERSION` sube a 35.0.0, con resolución tolerante: si la versión configurada no está instalada se usa la más nueva disponible. `update.sh` acepta `INSTALL_BUILD_TOOLS=1` para instalarla.
+Endurecimiento completo del servicio. Cambia de forma incompatible el modelo de
+autenticación y el mínimo de Python, de ahí el salto de versión mayor.
 
-- `update.sh` para actualizar una instalación existente sin reinstalar: sincroniza código, actualiza dependencias Python, unidades de systemd y nginx, y conserva `secrets.json`, `users.json`, keystore, traza y sesiones. Hace copia de seguridad previa en `/var/backups/apk-signer/` y **revierte automáticamente** si el servicio no responde en `/healthz` tras el reinicio.
-- `update.sh` añade a `secrets.json` las claves nuevas de `secrets.example.json` sin tocar los valores existentes, de modo que una instalación antigua recibe las opciones nuevas al actualizar.
-- `lib/common.sh` con las funciones compartidas por `setup.sh` y `update.sh`.
-- La versión instalada se registra en `/opt/apk-signer/.version`.
+### Cambios incompatibles
+- El token de usuario y el código MFA se canjean una sola vez en `POST /api/auth/login` por una sesión de 15 minutos. `/sign`, `/download`, `/logs/data` y `/api/admin/*` ya no aceptan `userToken`/`mfaCode`/`adminToken`/`adminCode`: usan esa sesión en `Authorization: Bearer` o en el campo `authToken`.
+- Se eliminan `GET /download/<sessionId>` y `GET /logs/data`. Sus equivalentes son `POST /download` y `POST /logs/data`, ambos autenticados.
+- El mínimo de Python sube de 3.9 a 3.11. Implica Debian 12+ / Ubuntu 24.04+ con el Python del sistema.
+- El portal se sirve solo por HTTPS. nginx redirige el puerto 80 a 443.
 
-### Fixed
-- **`zipalign` no funcionaba en una instalación real.** `setup.sh` lo copiaba fuera del SDK, pero enlaza dinámicamente contra `lib64/libc++.so` y ahí falla con `error while loading shared libraries`. El resultado era que **todos los APK se firmaban sin alinear**, con el aviso correspondiente. Ahora se apunta al binario dentro del SDK y se borra la copia rota. Detectado desplegando sobre Ubuntu 26.04; ni los tests ni el CI podían verlo porque usan un `zipalign` de mentira.
-- **La traza quedaba sin sellar en una instalación por defecto.** `secrets.example.json` traía `LOG_HMAC_KEY` con un valor de ejemplo que no es hex ni base64 válidos, así que los eventos se escribían sin `mac`... y `/logs/verify` seguía respondiendo `ok: true`. Ahora `setup.sh` y `update.sh` generan una clave aleatoria si no hay una válida, y la verificación devuelve `ok: false` con un aviso explícito cuando no hay clave, porque sin ella el encadenado no protege frente a una reescritura completa del fichero.
+### Seguridad
+- TLS obligatorio. `setup.sh` genera un certificado autofirmado si no hay uno corporativo.
+- `/logs/data` deja de ser anónimo. Un administrador ve la traza completa; un usuario, solo sus propios eventos.
+- `POST /download` exige ser el firmante de la sesión, o administrador. Conocer un `sessionId` ya no da acceso al APK firmado.
+- Anti-replay de TOTP: cada código se canjea una sola vez.
+- Bloqueo temporal tras 5 intentos fallidos, efectivo aunque el siguiente intento sea correcto. Los tokens desconocidos se contabilizan por IP.
+- Rate limiting en nginx: 12 r/min en `/api/auth/login`, 20 r/min y 3 conexiones en `/inspect`, 10 r/s en el resto.
+- Las contraseñas del keystore se pasan a `apksigner` por entorno, no en `argv`.
+- El nombre de fichero recibido del cliente se sanea con `secure_filename`, y el `sessionId` se valida contra `[A-Za-z0-9_-]{8,64}`.
+- `ProxyFix` con número de proxies de confianza configurable (`TRUSTED_PROXIES`).
+- `Cache-Control: no-store` en todo salvo `/static/*`.
+- Unidad de systemd endurecida: `ProtectSystem=strict`, `PrivateTmp`, `PrivateDevices`, `NoNewPrivileges`, `SystemCallFilter=@system-service` y `ReadWritePaths` acotado.
+- Soporte opcional de `LoadCredential=` para sacar `secrets.json` del árbol de la aplicación.
+- `secrets.json` se crea con permisos `0600`.
+- Flask 3.1.3 (PYSEC-2026-2151), gunicorn 26.2.0 y qrcode 8.2.
 
-### Security
-- Flask sube de 3.0.3 a 3.1.3 por PYSEC-2026-2151, detectado por `pip-audit` en la primera ejecución del CI. Los 95 tests pasan sin cambios en 3.1.3.
-- El mínimo de Python sube de 3.9 a 3.11. En 3.9 no existe una versión de `pillow` sin vulnerabilidades conocidas (los parches requieren 3.10+), y lo mismo ocurre con `click` 8.3.3. `pillow` llega como dependencia de `qrcode[pil]` y solo se usa para generar el QR de MFA a partir de una URI propia, así que la exposición real es baja, pero no había forma de dejar `pip-audit` en verde sin subir de versión. Implica Debian 12+ / Ubuntu 24.04+ con el Python del sistema.
-- El job de seguridad del CI se fija explícitamente a la versión **mínima** soportada. La resolución de dependencias depende de la versión de Python, y auditar solo en la más nueva ocultaba precisamente este problema: el CI en 3.11 daba verde mientras un despliegue en 3.9 arrastraba 19 vulnerabilidades.
+### Añadido
+- `update.sh`: actualiza una instalación existente conservando configuración, usuarios, keystore, traza y sesiones. Copia de seguridad previa en `/var/backups/apk-signer/` y reversión automática si el servicio no responde tras reiniciar. Incorpora a `secrets.json` las claves nuevas del ejemplo sin tocar los valores existentes.
+- Traza de auditoría encadenada: cada evento lleva `seq` correlativo y `prev` con el hash del anterior, además del MAC por línea. `POST /logs/verify` recorre el fichero completo y señala la primera rotura. Botón "Verificar cadena" en el modal de Logs.
+- `SYSLOG_ADDRESS` opcional para enviar la traza a un syslog o SIEM remoto.
+- `zipalign` antes de firmar, con alineado a página de 16 KB (`ZIPALIGN_PAGE_KB`) como exige Android 15+. Si el binario instalado no admite `-P`, degrada a 4 KB avisando en la firma.
+- Suite de 100 tests con pytest e integración continua: tests en Python 3.11, 3.12 y 3.14, `ruff`, `bandit`, `pip-audit`, construcción de la imagen de Docker con comprobación del utillaje dentro del contenedor, y `nginx -t`.
+- `docs/DOCKER.md` con el despliegue en contenedores y la obtención del QR del TOTP inicial.
+- Indicador de sesión activa y botón de cierre de sesión en el portal.
 
-### Changed
-- `setup.sh` comprueba la versión de Python antes de instalar nada y aborta con instrucciones si es anterior a 3.11.
-- Matriz de CI a Python 3.11 y 3.12; `ruff` apunta a `py311`.
+### Corregido
+- `zipalign` no funcionaba en una instalación real: se copiaba fuera del SDK y perdía sus librerías, de modo que todos los APK se firmaban sin alinear.
+- La imagen de Docker no construía: `openjdk-17` no existe en la base de Debian 13. Se usa `default-jre-headless`.
+- La traza quedaba sin sellar en una instalación por defecto, y aun así la verificación la daba por íntegra. `setup.sh` y `update.sh` generan la clave, y la verificación devuelve `ok: false` cuando falta.
+- Los errores 4xx/5xx devuelven siempre JSON, incluidos 413 y los timeouts de `apksigner`.
+- El contador de intentos fallidos no llegaba a persistirse, de modo que el bloqueo nunca se activaba.
 
-## [1.8.0] - 2026-08-31
-### Added
-- Suite de tests con pytest (95 casos): autenticación, flujo completo de firma, cabeceras y errores HTTP, traza de auditoría y mantenimiento. Las herramientas externas se sustituyen por scripts en `tests/fakebin/` antepuestos al `PATH`, de modo que los tests recorren el mismo código de `subprocess` que producción sin necesitar el Android SDK.
-- Integración continua en GitHub Actions: `pytest` en Python 3.9 y 3.11, `ruff`, `bandit`, `pip-audit`, `bash -n setup.sh` y `nginx -t` sobre la configuración real. Dependabot para pip, actions y la imagen base.
-- Traza de auditoría encadenada por hash: cada evento lleva `seq` correlativo y `prev` con el hash del anterior. Un MAC por línea no detecta el borrado de eventos, porque las líneas supervivientes siguen siendo válidas; el encadenado sí.
-- `POST /logs/verify` (solo admin) recorre la traza completa comprobando MAC y encadenado, y señala la primera rotura. Botón "Verificar cadena" en el modal de Logs.
-- `SYSLOG_ADDRESS` opcional para enviar la traza a un syslog o SIEM remoto, única defensa real frente a quien controle la máquina y pueda borrar el fichero.
-- La rotación de `cleanup.py` deja un evento `log-rotated` que enlaza con el hash del fichero rotado, de forma que la cadena no se parte al rotar.
-
-### Changed
-- `app.py` (1.427 líneas) se separa en `config.py`, `audit.py`, `auth.py`, `signing.py` y `app.py`, con dependencias en una sola dirección. `app:app` sigue siendo el punto de entrada, así que ni la unit de systemd ni el `Dockerfile` cambian. Los 95 tests pasan sin modificación, que es lo que acredita que el corte preserva el comportamiento.
-- `cleanup.py` deja de tener `/opt/apk-signer` fijo: deriva la ruta de su propia ubicación y respeta `CREDENTIALS_DIRECTORY` igual que la aplicación.
-- El servidor de desarrollo escucha en `127.0.0.1` en lugar de `0.0.0.0`; se abre con `APK_SIGNER_DEV_HOST` si hace falta. En producción arranca gunicorn desde systemd.
-
-### Fixed
-- La verificación de la cadena trataba el evento ancla de rotación como una rotura, porque su `prev` y su `seq` no empiezan de cero. Ahora se reconoce como continuación y se informa del fichero de origen en `continuesFrom`.
-
-## [1.7.0] - 2026-08-31
-### Security
-- Autenticación por sesión corta: token + MFA se canjean una sola vez en `POST /api/auth/login` por un `authToken` con caducidad (15 min por defecto) que autoriza firmar, verificar, descargar y consultar la traza. Nuevo `POST /api/auth/logout`.
-- Anti-replay de TOTP: el contador consumido se guarda por usuario, de modo que un código capturado no abre una segunda sesión.
-- Bloqueo temporal tras 5 intentos fallidos (15 min), aplicado también cuando el intento siguiente es correcto. Los tokens desconocidos se contabilizan por IP.
-- El estado de autenticación (sesiones, contadores, bloqueos) se guarda con bloqueo exclusivo de fichero (`flock`), de forma que es coherente entre los varios workers de gunicorn. Verificado con 8 procesos concurrentes: un único canje por código.
-- Rate limiting en nginx: 12 r/min en `/api/auth/login`, 20 r/min y 3 conexiones en `/inspect`, 10 r/s en el resto, respondiendo 429.
-- `ProxyFix` con número de proxies de confianza configurable (`TRUSTED_PROXIES`). La IP de la traza deja de leerse de `X-Forwarded-For` a mano, que era falsificable por cualquiera.
-- `/sign`, `/download`, `/logs/data` y `/api/admin/*` dejan de aceptar `userToken`/`mfaCode`/`adminToken`/`adminCode`: usan la sesión.
-- Unit de systemd endurecida: `ProtectSystem=strict`, `PrivateTmp`, `PrivateDevices`, `NoNewPrivileges`, `SystemCallFilter=@system-service` y `ReadWritePaths` acotado a `/opt/apk-signer`. `MemoryDenyWriteExecute` se deja fuera a propósito porque rompería el JIT de la JVM.
-- Soporte opcional de `LoadCredential=` de systemd: si se define, `secrets.json` se lee de `$CREDENTIALS_DIRECTORY` y no necesita vivir en el árbol de la aplicación.
-
-### Added
-- `zipalign -p -f 4` antes de firmar, instalado por `setup.sh` y por el `Dockerfile`. Si falta o falla, la firma continúa pero se informa con `"aligned": false` y un `warning`, y queda en la traza.
-- `/healthz` informa de `zipalign_configured`, `zipalign_exists` y de la configuración de sesión.
-- Indicador de sesión activa y botón "Cerrar sesión" en el portal.
-
-### Changed
-- Los errores 4xx/5xx devuelven siempre JSON en lugar de la página HTML de Werkzeug, incluidos 413 (con el límite en MB) y los timeouts de `apksigner`, que antes producían un 500 sin explicación.
-
-### Fixed
-- El contador de intentos fallidos no llegaba a persistirse: al registrarse dentro de un gestor de contexto que lanzaba a continuación `PermissionError`, la escritura posterior al `yield` se saltaba y el bloqueo nunca se activaba.
-
-### Removed
-- `verify_totp` y `require_admin_session`, sin uso tras la migración a sesiones.
-
-## [1.6.1] - 2026-08-31
-### Security
-- El portal se sirve solo por HTTPS: nginx redirige el puerto 80 a 443 y `setup.sh` genera un certificado autofirmado si no hay uno corporativo. El token de usuario y el código MFA dejan de viajar en claro.
-- `/logs/data` deja de ser anónimo: pasa a `POST` con token + MFA. Un admin ve toda la traza; un usuario normal, solo sus propios eventos.
-- `/download/<sessionId>` (GET, sin autenticar) se sustituye por `POST /download` con token + MFA, restringido al usuario que firmó la sesión o a un admin. Conocer un `sessionId` ya no da acceso al APK firmado.
-- Las contraseñas del keystore se pasan a `apksigner` por entorno (`env:`) en lugar de `argv`, donde eran visibles en `ps` durante la firma.
-- El nombre de fichero recibido del cliente se sanea con `secure_filename` antes de construir la ruta del APK firmado, y el `sessionId` se valida contra `[A-Za-z0-9_-]{8,64}`.
-- `Cache-Control` deja de ser `public, max-age=600` en todas las respuestas: solo `/static/*` es cacheable y el resto (APK firmado, trazas, listado de usuarios) pasa a `no-store`.
-- `secrets.json` se crea con permisos `0600` de forma explícita.
-
-### Added
-- `LICENSE` (MIT) y `.gitignore` que excluye `secrets.json`, `users.json`, keystores y material TLS.
-- Sección "Control de acceso" en el README y entradas 11-15 en `docs/RESUMEN_ERRORES.md`.
-
-### Changed
-- `client_max_body_size` de nginx baja de 150m a 100m para alinearse con `MAX_CONTENT_LENGTH`.
+### Cambiado
+- `app.py` se separa en `config`, `audit`, `auth`, `signing` y `app`. `app:app` sigue siendo el punto de entrada.
+- `docker-compose.yml` monta `./data` como directorio, de forma que `users.json` y el QR del administrador quedan accesibles en el host. Incluye `healthcheck`.
+- Documentación reorganizada en README (uso), `docs/INSTALACION.md` (systemd), `docs/DOCKER.md` (contenedores) y `docs/RESUMEN_ERRORES.md` (31 problemas conocidos).
+- Build Tools 35.0.0 por defecto, con resolución tolerante si no está instalada.
+- El servidor de desarrollo escucha en `127.0.0.1`; se abre con `APK_SIGNER_DEV_HOST`.
 
 ## [1.6.0] - 2026-01-21
 ### Added
