@@ -732,6 +732,10 @@
         const desde = s.continuesFrom ? ` Continúa la cadena de ${s.continuesFrom}.` : "";
         chainResult.textContent =
           `Traza íntegra: ${s.events} eventos, ${s.macOk} con MAC verificado, sin roturas de cadena.${desde}`;
+      } else if (!s.hasKey) {
+        chainResult.textContent =
+          `SIN SELLAR: ${s.warning || "no hay LOG_HMAC_KEY configurada"}. ` +
+          `Genera una clave en secrets.json y reinicia el servicio.`;
       } else {
         const partes = [];
         if (s.macBad?.length) partes.push(`${s.macBad.length} evento(s) modificados`);

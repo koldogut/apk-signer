@@ -57,6 +57,43 @@ sudo nginx -t && sudo systemctl reload nginx
 
 Puedes cambiar las rutas con las variables `TLS_CERT` y `TLS_KEY` al ejecutar `setup.sh`.
 
+## Actualización de una instalación existente
+
+`setup.sh` instala desde cero. Para actualizar una instalación que ya está en marcha, usa `update.sh`:
+
+```bash
+cd apk-signer
+git pull
+sudo bash update.sh
+```
+
+Qué hace, y qué no:
+
+* **Actualiza** el código, las dependencias Python (`pip install -U -r requirements.txt`), las unidades de systemd y la configuración de nginx.
+* **Conserva** `secrets.json`, `users.json`, el keystore, la traza de auditoría y las sesiones de trabajo.
+* **Añade a `secrets.json` las claves nuevas** que aparezcan en `secrets.example.json`, sin tocar los valores que ya tengas configurados. Es lo que permite que una instalación antigua reciba opciones nuevas.
+* **No** instala paquetes del sistema ni el SDK de Android: da por hecho que ya están. Si cambia `BUILD_TOOLS_VERSION`, vuelve a ejecutar `setup.sh`.
+* **Hace copia de seguridad antes de tocar nada** en `/var/backups/apk-signer/` (configuración, usuarios, keystore y traza; se excluyen las sesiones de trabajo por tamaño). Conserva las 5 últimas, ajustable con `KEEP_BACKUPS`.
+* **Revierte automáticamente** si el servicio no vuelve a responder en `/healthz` tras el reinicio, y muestra los registros del fallo.
+
+Variables útiles:
+
+```bash
+sudo KEEP_BACKUPS=10 bash update.sh   # conservar más copias
+sudo SKIP_DEPS=1 bash update.sh       # solo código, sin tocar dependencias
+```
+
+La versión instalada se guarda en `/opt/apk-signer/.version` y `update.sh` la muestra al empezar, junto con la del clon.
+
+### Restaurar una copia a mano
+
+```bash
+sudo systemctl stop apk-signer
+sudo tar -xzf /var/backups/apk-signer/apk-signer-AAAAMMDD-HHMMSS.tar.gz -C /opt/apk-signer
+sudo chown -R apk-signer:apk-signer /opt/apk-signer
+sudo systemctl start apk-signer
+```
+
 ## Comprobaciones básicas de funcionamiento
 
 Ejecuta estos comandos para confirmar que el servicio web está levantado y sirviendo la UI:

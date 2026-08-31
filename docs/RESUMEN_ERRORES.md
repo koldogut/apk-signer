@@ -219,3 +219,44 @@ sudo PATH="/usr/bin:$PATH" bash setup.sh
 ```
 
 Comprueba qué versión se está usando con `python3 --version` antes de lanzar el script.
+
+## 26) La firma avisa de "error while loading shared libraries: libc++.so"
+
+**Causa:** una instalación anterior copiaba `zipalign` a `/opt/apk-signer/tools/`. Ese binario enlaza dinámicamente contra `lib64/libc++.so`, que vive dentro del directorio de Build Tools, así que fuera de ahí no arranca. `aapt2` no da el problema porque va enlazado estáticamente.
+
+**Efecto:** la firma continuaba, pero **sin alinear el APK** y avisando en la respuesta y en la traza.
+
+**Solución:** `setup.sh` y `update.sh` ya apuntan `ZIPALIGN` al binario dentro del SDK y borran la copia rota. Si vienes de una instalación antigua, basta con actualizar:
+
+```bash
+cd apk-signer && git pull && sudo bash update.sh
+```
+
+Comprueba después que `zipalign_exists` es `true` en `/healthz` y que una firma devuelve `"aligned": true`.
+
+## 27) "Verificar cadena" dice SIN SELLAR
+
+**Causa:** `LOG_HMAC_KEY` no está configurada, o conserva el valor de ejemplo. Los eventos se escriben sin `mac`, y entonces el encadenado por sí solo no prueba nada: quien pueda escribir el fichero lo reescribe entero y recalcula los hashes.
+
+**Solución:** `setup.sh` y `update.sh` generan una clave automáticamente si no hay una válida. A mano:
+
+```bash
+sudo -u apk-signer python3 -c "import os;print(os.urandom(32).hex())"
+# copiar el valor a LOG_HMAC_KEY en /opt/apk-signer/secrets.json
+sudo systemctl restart apk-signer
+```
+
+> Los eventos anteriores a configurar la clave no se pueden sellar retroactivamente: seguirán apareciendo como "Sin MAC".
+
+## 28) `update.sh` revierte la actualización
+
+**Causa:** tras actualizar, el servicio no respondió en `/healthz` dentro de 30 s. El script restauró la copia previa y volvió a arrancar la versión anterior.
+
+**Solución:** el propio script vuelca los últimos registros antes de revertir. Para investigar:
+
+```bash
+sudo journalctl -u apk-signer.service -n 100 --no-pager
+ls -l /var/backups/apk-signer/
+```
+
+Sospechosos habituales: una dependencia nueva que no instaló bien, `secrets.json` con una clave nueva mal rellenada, o una directiva de systemd incompatible (ver entrada 20).

@@ -6,6 +6,16 @@ El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1
 y el proyecto sigue [Semantic Versioning](https://semver.org/lang/es/).
 
 ## [Unreleased]
+### Added
+- `update.sh` para actualizar una instalación existente sin reinstalar: sincroniza código, actualiza dependencias Python, unidades de systemd y nginx, y conserva `secrets.json`, `users.json`, keystore, traza y sesiones. Hace copia de seguridad previa en `/var/backups/apk-signer/` y **revierte automáticamente** si el servicio no responde en `/healthz` tras el reinicio.
+- `update.sh` añade a `secrets.json` las claves nuevas de `secrets.example.json` sin tocar los valores existentes, de modo que una instalación antigua recibe las opciones nuevas al actualizar.
+- `lib/common.sh` con las funciones compartidas por `setup.sh` y `update.sh`.
+- La versión instalada se registra en `/opt/apk-signer/.version`.
+
+### Fixed
+- **`zipalign` no funcionaba en una instalación real.** `setup.sh` lo copiaba fuera del SDK, pero enlaza dinámicamente contra `lib64/libc++.so` y ahí falla con `error while loading shared libraries`. El resultado era que **todos los APK se firmaban sin alinear**, con el aviso correspondiente. Ahora se apunta al binario dentro del SDK y se borra la copia rota. Detectado desplegando sobre Ubuntu 26.04; ni los tests ni el CI podían verlo porque usan un `zipalign` de mentira.
+- **La traza quedaba sin sellar en una instalación por defecto.** `secrets.example.json` traía `LOG_HMAC_KEY` con un valor de ejemplo que no es hex ni base64 válidos, así que los eventos se escribían sin `mac`... y `/logs/verify` seguía respondiendo `ok: true`. Ahora `setup.sh` y `update.sh` generan una clave aleatoria si no hay una válida, y la verificación devuelve `ok: false` con un aviso explícito cuando no hay clave, porque sin ella el encadenado no protege frente a una reescritura completa del fichero.
+
 ### Security
 - Flask sube de 3.0.3 a 3.1.3 por PYSEC-2026-2151, detectado por `pip-audit` en la primera ejecución del CI. Los 95 tests pasan sin cambios en 3.1.3.
 - El mínimo de Python sube de 3.9 a 3.11. En 3.9 no existe una versión de `pillow` sin vulnerabilidades conocidas (los parches requieren 3.10+), y lo mismo ocurre con `click` 8.3.3. `pillow` llega como dependencia de `qrcode[pil]` y solo se usa para generar el QR de MFA a partir de una URI propia, así que la exposición real es baja, pero no había forma de dejar `pip-audit` en verde sin subir de versión. Implica Debian 12+ / Ubuntu 24.04+ con el Python del sistema.

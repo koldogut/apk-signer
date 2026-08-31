@@ -206,7 +206,22 @@ def verify_log_chain(path: Optional[Path] = None) -> Dict[str, Any]:
     problemas = [s for s in summary["macBad"] if isinstance(s, int)]
     problemas += [c["seq"] for c in summary["chainBad"] if isinstance(c["seq"], int)]
     summary["firstProblemSeq"] = min(problemas) if problemas else None
-    summary["ok"] = not summary["macBad"] and not summary["chainBad"] and not summary["unreadable"]
+
+    # Sin LOG_HMAC_KEY los eventos se escriben sin MAC, y entonces el
+    # encadenado no prueba nada: cualquiera con acceso al fichero puede
+    # reescribirlo entero y recalcular los hashes. Decir "traza íntegra" en ese
+    # caso seria enganoso, asi que no se considera correcta.
+    summary["ok"] = (
+        bool(HMAC_KEY)
+        and not summary["macBad"]
+        and not summary["chainBad"]
+        and not summary["unreadable"]
+    )
+    if not HMAC_KEY:
+        summary["warning"] = (
+            "No hay LOG_HMAC_KEY configurada: los eventos se registran sin MAC "
+            "y la cadena no protege frente a una reescritura completa del fichero."
+        )
     return summary
 
 def verify_event_mac(evt: Dict[str, Any]) -> Tuple[str, bool]:

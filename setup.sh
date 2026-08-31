@@ -1,37 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL_DIR="/opt/apk-signer"
-USER_NAME="apk-signer"
-SDK_ROOT="${SDK_ROOT:-/opt/android-sdk}"
-BUILD_TOOLS_VERSION="${BUILD_TOOLS_VERSION:-34.0.0}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+
 CMDLINE_ZIP_URL="https://dl.google.com/android/repository/commandlinetools-linux-11479570_latest.zip"
 CMDLINE_ZIP_FALLBACK_URL="https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
 CMDLINE_SHA256_URL="${CMDLINE_SHA256_URL:-}"
 SDKMANAGER_BIN="${SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TLS_DIR="${TLS_DIR:-/etc/ssl/apk-signer}"
 TLS_CERT="${TLS_CERT:-${TLS_DIR}/apk-signer.crt}"
 TLS_KEY="${TLS_KEY:-${TLS_DIR}/apk-signer.key}"
-
-log() {
-  echo "[apk-signer] $*"
-}
-
-warn() {
-  echo "[apk-signer][WARN] $*" >&2
-}
-
-die() {
-  echo "[apk-signer][ERROR] $*" >&2
-  exit 1
-}
-
-require_root() {
-  if [[ "${EUID}" -ne 0 ]]; then
-    die "Ejecuta este script como root (usa sudo)."
-  fi
-}
 
 install_packages() {
   export DEBIAN_FRONTEND=noninteractive
@@ -39,23 +19,6 @@ install_packages() {
   apt-get update
   mkdir -p /var/log/chrony
   apt-get install -y git python3 python3-venv python3-pip openjdk-17-jre curl unzip zip jq ca-certificates rsync nginx qrencode iproute2 chrony openssl
-}
-
-require_python() {
-  # 3.11 es el minimo: por debajo, pillow y click no tienen version parcheada
-  # (los arreglos exigen 3.10+). Ver la nota del README.
-  local version
-  if ! command -v python3 >/dev/null 2>&1; then
-    die "No se encontro python3."
-  fi
-  version="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
-  if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'; then
-    die "Se requiere Python 3.11 o superior (detectado ${version}).
-       En Debian 11 / Ubuntu 22.04 el Python del sistema es anterior: instala un
-       3.11 aparte (por ejemplo con deadsnakes) y vuelve a ejecutar con
-       PATH apuntando a el."
-  fi
-  log "Python ${version} OK."
 }
 
 cleanup_legacy_install() {
@@ -242,44 +205,6 @@ bootstrap_admin_user() {
   sudo -u "${USER_NAME}" -H "${INSTALL_DIR}/.venv/bin/python" "${INSTALL_DIR}/tools/bootstrap_users.py"
 }
 
-update_secrets_paths() {
-  local aapt_src="${SDK_ROOT}/build-tools/${BUILD_TOOLS_VERSION}/aapt2"
-  local apksigner_src="${SDK_ROOT}/build-tools/${BUILD_TOOLS_VERSION}/lib/apksigner.jar"
-  local zipalign_src="${SDK_ROOT}/build-tools/${BUILD_TOOLS_VERSION}/zipalign"
-
-  if [[ -f "${apksigner_src}" ]]; then
-    sudo -u "${USER_NAME}" -H cp "${apksigner_src}" "${INSTALL_DIR}/tools/apksigner.jar"
-  else
-    warn "No se encontró apksigner.jar en ${apksigner_src}"
-  fi
-
-  if [[ -x "${aapt_src}" ]]; then
-    sudo -u "${USER_NAME}" -H install -m 0755 "${aapt_src}" "${INSTALL_DIR}/tools/aapt2"
-  else
-    warn "No se encontró aapt2 en ${aapt_src}"
-  fi
-
-  if [[ -x "${zipalign_src}" ]]; then
-    sudo -u "${USER_NAME}" -H install -m 0755 "${zipalign_src}" "${INSTALL_DIR}/tools/zipalign"
-  else
-    warn "No se encontró zipalign en ${zipalign_src}. Los APK se firmarán sin alinear."
-  fi
-
-  if [[ -f "${INSTALL_DIR}/secrets.json" ]]; then
-    local tmp_file
-    tmp_file="$(mktemp)"
-    jq \
-      --arg aapt "${INSTALL_DIR}/tools/aapt2" \
-      --arg apksigner "${INSTALL_DIR}/tools/apksigner.jar" \
-      --arg zipalign "${INSTALL_DIR}/tools/zipalign" \
-      '.AAPT=$aapt | .APKSIGNER_JAR=$apksigner | .ZIPALIGN=$zipalign' \
-      "${INSTALL_DIR}/secrets.json" > "${tmp_file}"
-    mv "${tmp_file}" "${INSTALL_DIR}/secrets.json"
-    chown "${USER_NAME}:${USER_NAME}" "${INSTALL_DIR}/secrets.json"
-    chmod 0600 "${INSTALL_DIR}/secrets.json"
-  fi
-}
-
 install_systemd_units() {
   log "Instalando servicios systemd..."
   systemctl stop apk-signer.service >/dev/null 2>&1 || true
@@ -381,7 +306,7 @@ post_checks() {
     warn "apksigner.jar no está instalado. Revisa la instalación del SDK."
   fi
 
-  if [[ ! -x "${INSTALL_DIR}/tools/zipalign" ]]; then
+  if [[ ! -x "$(sdk_zipalign)" ]]; then
     warn "zipalign no está instalado: los APK se firmarán sin alinear."
   fi
 }
@@ -398,7 +323,8 @@ accept_android_licenses
 install_android_build_tools
 prepare_dirs
 ensure_secrets
-update_secrets_paths
+update_tool_paths
+ensure_hmac_key
 bootstrap_admin_user
 ensure_time_sync
 install_systemd_units
@@ -406,6 +332,8 @@ ensure_tls_cert
 configure_nginx
 check_service
 post_checks
+
+record_version "$(git -C "${SCRIPT_DIR}" rev-parse --short HEAD 2>/dev/null || echo desconocida)"
 
 log "OK. Edita ${INSTALL_DIR}/secrets.json y copia un KeyStore.jks real antes de usar el servicio."
 log "Portal disponible en https://$(hostname -f 2>/dev/null || hostname)/ (HTTP redirige a HTTPS)."

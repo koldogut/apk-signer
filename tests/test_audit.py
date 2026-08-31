@@ -177,3 +177,46 @@ class TestContenido:
         assert A.KEY_PASS not in crudo
         for u in A.load_users()["users"]:
             assert u["totp_secret"] not in crudo
+
+
+class TestSinClaveDeSellado:
+    """
+    Sin LOG_HMAC_KEY los eventos se escriben sin MAC. La cadena por si sola no
+    prueba nada en ese caso: quien pueda escribir el fichero lo reescribe entero
+    y recalcula los hashes. La verificacion NO debe decir que la traza es integra.
+    """
+
+    def test_sin_clave_la_traza_no_se_considera_integra(self, client, login, A, monkeypatch):
+        import audit
+        actividad(client, login)
+        monkeypatch.setattr(audit, "HMAC_KEY", None)
+        resumen = A.verify_log_chain()
+        assert resumen["hasKey"] is False
+        assert resumen["ok"] is False, "una traza sin sellar no puede darse por buena"
+        assert resumen["macBad"] == []
+        assert resumen["chainBad"] == []
+
+    def test_sin_clave_se_explica_el_motivo(self, client, login, A, monkeypatch):
+        import audit
+        actividad(client, login)
+        monkeypatch.setattr(audit, "HMAC_KEY", None)
+        resumen = A.verify_log_chain()
+        assert "LOG_HMAC_KEY" in resumen["warning"]
+
+    def test_sin_clave_ningun_evento_se_da_por_verificado(self, client, login, A, monkeypatch):
+        import audit
+        actividad(client, login)
+        monkeypatch.setattr(audit, "HMAC_KEY", None)
+        eventos = client.post("/logs/data", json={"limit": 10},
+                              headers=login("admin")).get_json()["events"]
+        # Los escritos antes del cambio llevan mac pero no hay con que validarlo
+        # ("Sin clave"); los posteriores ya se escriben sin mac ("Sin MAC").
+        # Lo que no puede pasar es que alguno figure como verificado.
+        assert eventos
+        assert {e["_integrity"] for e in eventos} <= {"Sin clave", "Sin MAC"}
+        assert not any(e["_integrity_ok"] for e in eventos)
+
+    def test_con_clave_vuelve_a_ser_integra(self, client, login, A):
+        actividad(client, login)
+        resumen = A.verify_log_chain()
+        assert resumen["hasKey"] is True and resumen["ok"] is True
