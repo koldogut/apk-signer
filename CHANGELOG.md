@@ -8,6 +8,12 @@ y el proyecto sigue [Semantic Versioning](https://semver.org/lang/es/).
 ## [Unreleased]
 ### Security
 - Flask sube de 3.0.3 a 3.1.3 por PYSEC-2026-2151, detectado por `pip-audit` en la primera ejecución del CI. Los 95 tests pasan sin cambios en 3.1.3.
+- El mínimo de Python sube de 3.9 a 3.11. En 3.9 no existe una versión de `pillow` sin vulnerabilidades conocidas (los parches requieren 3.10+), y lo mismo ocurre con `click` 8.3.3. `pillow` llega como dependencia de `qrcode[pil]` y solo se usa para generar el QR de MFA a partir de una URI propia, así que la exposición real es baja, pero no había forma de dejar `pip-audit` en verde sin subir de versión. Implica Debian 12+ / Ubuntu 24.04+ con el Python del sistema.
+- El job de seguridad del CI se fija explícitamente a la versión **mínima** soportada. La resolución de dependencias depende de la versión de Python, y auditar solo en la más nueva ocultaba precisamente este problema: el CI en 3.11 daba verde mientras un despliegue en 3.9 arrastraba 19 vulnerabilidades.
+
+### Changed
+- `setup.sh` comprueba la versión de Python antes de instalar nada y aborta con instrucciones si es anterior a 3.11.
+- Matriz de CI a Python 3.11 y 3.12; `ruff` apunta a `py311`.
 
 ## [1.8.0] - 2026-08-31
 ### Added

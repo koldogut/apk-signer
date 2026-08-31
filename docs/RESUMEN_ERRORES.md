@@ -203,3 +203,19 @@ pytest
 ```
 
 Los tests montan su propia configuración en un directorio temporal vía `CREDENTIALS_DIRECTORY`: no usan ni modifican el `secrets.json` de la máquina.
+
+## 25) `setup.sh` aborta con "Se requiere Python 3.11 o superior"
+
+**Causa:** el Python del sistema es anterior. Debian 11 trae 3.9 y Ubuntu 22.04 trae 3.10.
+
+**Motivo del mínimo:** por debajo de 3.11 no hay versión de `pillow` sin vulnerabilidades conocidas —los parches exigen 3.10+— ni de `click`. `pillow` entra por `qrcode[pil]`, que solo genera el PNG del QR de MFA, así que el riesgo real es bajo, pero `pip-audit` no puede quedar en verde.
+
+**Solución:** instala un Python 3.11 aparte y ejecuta el instalador con él por delante en el `PATH`:
+
+```bash
+sudo add-apt-repository ppa:deadsnakes/ppa
+sudo apt-get update && sudo apt-get install -y python3.11 python3.11-venv
+sudo PATH="/usr/bin:$PATH" bash setup.sh
+```
+
+Comprueba qué versión se está usando con `python3 --version` antes de lanzar el script.

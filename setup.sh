@@ -41,6 +41,23 @@ install_packages() {
   apt-get install -y git python3 python3-venv python3-pip openjdk-17-jre curl unzip zip jq ca-certificates rsync nginx qrencode iproute2 chrony openssl
 }
 
+require_python() {
+  # 3.11 es el minimo: por debajo, pillow y click no tienen version parcheada
+  # (los arreglos exigen 3.10+). Ver la nota del README.
+  local version
+  if ! command -v python3 >/dev/null 2>&1; then
+    die "No se encontro python3."
+  fi
+  version="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+  if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'; then
+    die "Se requiere Python 3.11 o superior (detectado ${version}).
+       En Debian 11 / Ubuntu 22.04 el Python del sistema es anterior: instala un
+       3.11 aparte (por ejemplo con deadsnakes) y vuelve a ejecutar con
+       PATH apuntando a el."
+  fi
+  log "Python ${version} OK."
+}
+
 cleanup_legacy_install() {
   if [[ -d "/etc/systemd/system/apk-signer.service.d" ]]; then
     log "Eliminando overrides antiguos de systemd..."
@@ -371,6 +388,7 @@ post_checks() {
 
 require_root
 install_packages
+require_python
 cleanup_legacy_install
 ensure_user
 sync_repo

@@ -8,8 +8,8 @@ El repositorio incluye el backend, UI, scripts y servicios systemd. Para ejecuta
 
 ## Requisitos
 
-* Debian 11+/Ubuntu 20.04+.
-* Python 3.9+ (con `venv`) y `pip`.
+* Debian 12+ / Ubuntu 24.04+ (por la versión de Python del sistema).
+* Python 3.11+ (con `venv`) y `pip`.
 * Java 17 (JRE) para ejecutar `apksigner.jar`.
 * Android Build Tools para `aapt2` y `apksigner.jar` (instalados por `setup.sh`).
 * Un keystore real (JKS) con alias y contraseñas válidas.
@@ -17,6 +17,10 @@ El repositorio incluye el backend, UI, scripts y servicios systemd. Para ejecuta
 * Un certificado TLS. `setup.sh` genera uno autofirmado si no existe; sustitúyelo por el corporativo.
 
 > Nota: el keystore no se incluye en el repo. Debe copiarse localmente y configurarse en `secrets.json`.
+
+> **Por qué 3.11 y no 3.9.** En Python 3.9 no existe una versión de `pillow` sin vulnerabilidades conocidas: los parches (12.1.1 en adelante) requieren 3.10+, y lo mismo pasa con `click` 8.3.3. `pillow` entra como dependencia de `qrcode[pil]`, que solo se usa para generar el PNG del QR de MFA a partir de una URI que construye el propio servicio, así que la exposición real es baja —no se parsea ninguna imagen ajena—, pero un `pip-audit` sobre un despliegue en 3.9 sale en rojo y no hay forma de arreglarlo sin subir de versión. 3.11 es además la versión del `Dockerfile`.
+>
+> Si necesitas desplegar sobre Debian 11 o Ubuntu 22.04, instala un Python 3.11 aparte (por ejemplo con `deadsnakes`) y apunta el `venv` a él en lugar de usar el del sistema.
 
 ## Instalación rápida (modo sistema con systemd)
 
@@ -182,9 +186,9 @@ Las herramientas externas (`java`/`apksigner`, `aapt2`, `zipalign`) se sustituye
 
 `.github/workflows/ci.yml` ejecuta en cada push y PR:
 
-* `pytest` en Python 3.9 y 3.11 (mínimo declarado y el del `Dockerfile`);
+* `pytest` en Python 3.11 y 3.12 (el mínimo soportado y el siguiente);
 * `ruff` sobre todo el repo y `bash -n setup.sh`;
-* `bandit` y `pip-audit` sobre las dependencias de producción;
+* `bandit` y `pip-audit` sobre las dependencias de producción, **en la versión mínima soportada**: la resolución de dependencias depende de la versión de Python, y auditar solo en la más nueva ocultaría vulnerabilidades que sí afectan al mínimo declarado;
 * `nginx -t` sobre `nginx/apk-signer.conf`, con un certificado de usar y tirar.
 
 Dependabot vigila `pip`, las GitHub Actions y la imagen base del `Dockerfile`.

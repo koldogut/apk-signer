@@ -3,9 +3,8 @@ testpaths = ["tests"]
 addopts = "-q --strict-markers"
 
 [tool.ruff]
-# 3.9 es el minimo declarado en el README; ruff avisa si se cuela sintaxis
-# posterior (por ejemplo `int | None` en anotaciones).
-target-version = "py39"
+# Minimo soportado. Ruff avisa si se cuela sintaxis posterior.
+target-version = "py311"
 line-length = 110
 exclude = [".venv", "venv", "work", "logs", "tests/fakebin"]
 
@@ -16,13 +15,18 @@ ignore = [
   "S603",    # subprocess con lista de argumentos: es exactamente lo que se quiere aqui
   "S404",    # importar subprocess es inevitable en un firmador
   "UP038",   # isinstance con tuplas sigue siendo mas legible
-  # typing.Dict/List siguen siendo validos y migrarlos a dict/list serian ~40
-  # cambios cosmeticos en una rama de seguridad. Pendiente para una limpieza aparte.
-  "UP006", "UP035",
+  # Modernizacion de tipado pendiente para una limpieza aparte: typing.Dict/List
+  # -> dict/list (UP006/UP035), Optional[X] -> X | None (UP007) y timezone.utc ->
+  # datetime.UTC (UP017). Son ~70 cambios cosmeticos que no pintan nada en una
+  # rama de seguridad, y aplicarlos ata el codigo a 3.10+/3.11+ en tiempo de
+  # ejecucion, no solo en las anotaciones.
+  "UP006", "UP035", "UP007", "UP017",
   # try/except/pass y /continue son deliberados en las rutas best-effort: la
   # traza y el mantenimiento no pueden tumbar una firma en curso.
   "S110", "S112",
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101", "S105", "S106"]  # assert y credenciales de mentira son normales en tests
+# assert y credenciales de mentira son normales en tests; B905 entra con la
+# misma modernizacion pendiente de arriba.
+"tests/*" = ["S101", "S105", "S106", "B905"]

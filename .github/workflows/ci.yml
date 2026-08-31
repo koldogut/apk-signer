@@ -16,8 +16,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 3.9 es el minimo que declara el README; 3.11 es el del Dockerfile.
-        python-version: ["3.9", "3.11"]
+        # 3.11 es el minimo declarado (y el del Dockerfile); 3.12 vigila que
+        # no se rompa nada con la siguiente.
+        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -55,6 +56,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
+          # DEBE ser la version MINIMA soportada, no la mas nueva: pip resuelve
+          # dependencias distintas segun la version de Python, y auditar solo en
+          # la mas nueva oculta vulnerabilidades que si afectan al minimo.
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements-dev.txt
