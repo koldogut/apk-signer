@@ -174,6 +174,14 @@ El servicio usa `-P 16` por defecto (`ZIPALIGN_PAGE_KB` en `secrets.json`), que 
 
 `/healthz` informa del valor efectivo en `zipalign_page_kb`.
 
+**Librerías comprimidas.** El alineado solo aplica a las `.so` almacenadas sin comprimir. Con `extractNativeLibs="true"` van deflatadas dentro del APK, no se pueden mapear en memoria y `zipalign` las marca `OK - compressed`: se saltan a propósito. En un APK mixto, cada librería recibe el trato que corresponde a su método. Que una `.so` comprimida aparezca en un offset no alineado es lo esperado, no un fallo.
+
+| `.so` en el APK | Qué hace el servicio |
+|---|---|
+| Sin comprimir (`Stored`) | Alinea a `ZIPALIGN_PAGE_KB` |
+| Comprimida (`Deflated`) | La deja como está (exenta) |
+| Mixto | Cada una según su método |
+
 ## Traza de auditoría
 
 Cada evento se registra en `logs/app.jsonl` con:
