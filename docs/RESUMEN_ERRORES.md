@@ -260,3 +260,19 @@ ls -l /var/backups/apk-signer/
 ```
 
 Sospechosos habituales: una dependencia nueva que no instaló bien, `secrets.json` con una clave nueva mal rellenada, o una directiva de systemd incompatible (ver entrada 20).
+
+## 29) `git pull` falla con "Los cambios locales serán sobrescritos" en `systemd/apk-signer-cleanup.timer`
+
+**Causa:** ese fichero se quedó con CRLF en el repositorio mientras `.gitattributes` declara `*.timer text eol=lf`. Git lo convertía al hacer checkout y quedaba marcado como modificado sin que nadie lo tocara. Corregido, pero un clon hecho **antes** del arreglo arrastra el problema una vez.
+
+**Solución:** en el clon afectado, descarta el estado local y alinéalo con el remoto:
+
+```bash
+cd apk-signer
+git fetch origin
+git reset --hard origin/main
+```
+
+> `reset --hard` descarta cambios locales del clon. Es seguro aquí porque el clon solo sirve para desplegar: la configuración y los datos viven en `/opt/apk-signer`, no en él.
+
+Los clones nuevos ya no lo sufren.
