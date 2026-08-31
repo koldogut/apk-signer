@@ -21,7 +21,7 @@ jobs:
         # puede desplegar sobre una version que el CI no prueba.
         python-version: ["3.11", "3.12", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -37,7 +37,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -54,7 +54,7 @@ jobs:
     name: Seguridad
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           # DEBE ser la version MINIMA soportada, no la mas nueva: pip resuelve
@@ -73,7 +73,7 @@ jobs:
     name: Configuracion de nginx
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Validar apk-signer.conf
         # Se monta un http{} minimo alrededor del fichero para poder pasar
         # `nginx -t`, junto con un certificado autofirmado de usar y tirar.
