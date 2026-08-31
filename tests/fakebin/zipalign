@@ -1,9 +1,35 @@
 #!/bin/sh
 # zipalign de mentira: valida los flags y copia entrada -> salida.
+# Con FAKE_ZIPALIGN_OLD=1 finge ser el de build-tools 34, que no admite -P.
 LOG="${FAKE_TOOLS_LOG:-/dev/null}"
+
+usage() {
+  echo "Zip alignment utility"
+  if [ -z "$FAKE_ZIPALIGN_OLD" ]; then
+    echo "Usage: zipalign [-f] [-p] [-P <pagesize_kb>] [-v] [-z] <align> infile.zip outfile.zip"
+    echo "  -P <pagesize_kb>: Align uncompressed .so files to the specified"
+    echo "                    page size. '-P' cannot be used in combination with '-p'."
+  else
+    echo "Usage: zipalign [-f] [-p] [-v] [-z] <align> infile.zip outfile.zip"
+  fi
+}
+
+# Sin argumentos: solo el texto de uso (asi detecta la app si soporta -P).
+[ $# -eq 0 ] && { usage; exit 2; }
+
 echo "zipalign $*" >> "$LOG"
 [ -n "$FAKE_ZIPALIGN_FAIL" ] && { echo "zipalign: unable to open file" >&2; exit 1; }
-# Se espera: -p -f 4 <in> <out>
+
+# -P y -p son excluyentes, igual que en el real.
+case " $* " in
+  *" -P "*" -p "*|*" -p "*" -P "*)
+    echo "ERROR: Invalid options: '-P <pagesize_kb>' and '-p' cannot be used in combination." >&2
+    exit 1 ;;
+esac
+if [ -n "$FAKE_ZIPALIGN_OLD" ]; then
+  case " $* " in *" -P "*) echo "zipalign: invalid option -- 'P'" >&2; exit 1 ;; esac
+fi
+
 IN=""; OUT=""
 for a in "$@"; do IN="$OUT"; OUT="$a"; done
 cp "$IN" "$OUT" || exit 2

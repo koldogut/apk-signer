@@ -81,8 +81,12 @@ def A(env):
     shutil.rmtree(root / "work" / "sessions", ignore_errors=True)
     (root / "work" / "sessions").mkdir(parents=True, exist_ok=True)
     Path(os.environ["FAKE_TOOLS_LOG"]).unlink(missing_ok=True)
-    for var in ("FAKE_ZIPALIGN_FAIL", "FAKE_AAPT_FAIL", "FAKE_VERIFY_FAIL"):
+    for var in ("FAKE_ZIPALIGN_FAIL", "FAKE_AAPT_FAIL", "FAKE_VERIFY_FAIL",
+                "FAKE_ZIPALIGN_OLD"):
         os.environ.pop(var, None)
+    # La deteccion de soporte de -P se cachea; hay que soltarla en cada test.
+    import signing
+    signing._ZIPALIGN_SUPPORTS_PAGE_SIZE = None
     return app_module
 
 

@@ -11,7 +11,43 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from werkzeug.utils import secure_filename
 
-from config import AAPT_BIN, WORK_DIR, check_bin
+from config import AAPT_BIN, WORK_DIR, ZIPALIGN_BIN, ZIPALIGN_PAGE_KB, check_bin
+
+_ZIPALIGN_SUPPORTS_PAGE_SIZE: Optional[bool] = None
+
+def zipalign_supports_page_size() -> bool:
+    """
+    `-P <kb>` solo existe desde build-tools 35. En 34 hay que conformarse con
+    `-p`, que alinea a 4 KB. Se comprueba una vez leyendo el propio uso del
+    binario, en vez de deducirlo de la version del SDK.
+    """
+    global _ZIPALIGN_SUPPORTS_PAGE_SIZE
+    if _ZIPALIGN_SUPPORTS_PAGE_SIZE is None:
+        if not check_bin(ZIPALIGN_BIN):
+            _ZIPALIGN_SUPPORTS_PAGE_SIZE = False
+        else:
+            try:
+                _, out, err = run_cmd([ZIPALIGN_BIN], timeout=10)
+                _ZIPALIGN_SUPPORTS_PAGE_SIZE = "-P <pagesize_kb>" in (out + err)
+            except Exception:
+                _ZIPALIGN_SUPPORTS_PAGE_SIZE = False
+    return _ZIPALIGN_SUPPORTS_PAGE_SIZE
+
+def zipalign_args(src: Path, dst: Path) -> Tuple[List[str], int]:
+    """
+    Devuelve (argumentos, tamano_de_pagina_kb_efectivo).
+
+    `-P` y `-p` son excluyentes: zipalign rechaza que se pasen juntos.
+    """
+    args = [ZIPALIGN_BIN]
+    if ZIPALIGN_PAGE_KB and zipalign_supports_page_size():
+        args += ["-P", str(ZIPALIGN_PAGE_KB)]
+        page = ZIPALIGN_PAGE_KB
+    else:
+        args += ["-p"]   # equivale a 4 KB
+        page = 4
+    args += ["-f", "4", str(src), str(dst)]
+    return args, page
 
 def run_cmd(args: List[str], timeout: int = 60, env: Optional[Dict[str, str]] = None) -> Tuple[int, str, str]:
     # env se fusiona con el entorno del proceso; se usa para pasar secretos

@@ -5,7 +5,7 @@
 INSTALL_DIR="${INSTALL_DIR:-/opt/apk-signer}"
 USER_NAME="${USER_NAME:-apk-signer}"
 SDK_ROOT="${SDK_ROOT:-/opt/android-sdk}"
-BUILD_TOOLS_VERSION="${BUILD_TOOLS_VERSION:-34.0.0}"
+BUILD_TOOLS_VERSION="${BUILD_TOOLS_VERSION:-35.0.0}"
 MIN_PYTHON_MAJOR=3
 MIN_PYTHON_MINOR=11
 
@@ -50,13 +50,34 @@ require_python() {
 # zipalign NO se copia fuera del SDK: enlaza dinamicamente contra
 # lib64/libc++.so y, sacado de su directorio, falla con "error while loading
 # shared libraries". aapt2 si se puede copiar porque va enlazado estaticamente.
+# Version de build-tools realmente utilizable: la configurada si esta
+# instalada, y si no la mas nueva que haya. Asi una instalacion antigua sigue
+# funcionando aunque suba el valor por defecto.
+resolve_build_tools() {
+  if [[ -d "${SDK_ROOT}/build-tools/${BUILD_TOOLS_VERSION}" ]]; then
+    echo "${BUILD_TOOLS_VERSION}"
+    return
+  fi
+  local disponible
+  disponible="$(ls -1 "${SDK_ROOT}/build-tools" 2>/dev/null | sort -V | tail -1)"
+  if [[ -n "${disponible}" ]]; then
+    warn "build-tools ${BUILD_TOOLS_VERSION} no esta instalada; se usa ${disponible}."
+    echo "${disponible}"
+  fi
+}
+
 sdk_zipalign() {
-  echo "${SDK_ROOT}/build-tools/${BUILD_TOOLS_VERSION}/zipalign"
+  local ver
+  ver="$(resolve_build_tools)"
+  [[ -n "${ver}" ]] && echo "${SDK_ROOT}/build-tools/${ver}/zipalign"
 }
 
 update_tool_paths() {
-  local aapt_src="${SDK_ROOT}/build-tools/${BUILD_TOOLS_VERSION}/aapt2"
-  local apksigner_src="${SDK_ROOT}/build-tools/${BUILD_TOOLS_VERSION}/lib/apksigner.jar"
+  local ver
+  ver="$(resolve_build_tools)"
+  [[ -n "${ver}" ]] || { warn "No hay build-tools instaladas en ${SDK_ROOT}."; return 0; }
+  local aapt_src="${SDK_ROOT}/build-tools/${ver}/aapt2"
+  local apksigner_src="${SDK_ROOT}/build-tools/${ver}/lib/apksigner.jar"
   local zipalign_src
   zipalign_src="$(sdk_zipalign)"
 

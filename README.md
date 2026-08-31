@@ -160,6 +160,20 @@ Antes de firmar, el servicio ejecuta `zipalign -p -f 4` sobre el APK subido. Es 
 
 Si `zipalign` no está configurado o falla, la firma continúa pero la respuesta incluye `"aligned": false` y un `warning`, y queda registrado en la traza. Comprueba `zipalign_exists` en `/healthz`.
 
+### Tamaño de página
+
+Las librerías nativas sin comprimir (`extractNativeLibs="false"`) deben quedar alineadas al tamaño de página del dispositivo. Android 15+ exige **16 KB**, y el `-p` clásico de `zipalign` solo alinea a 4 KB.
+
+El servicio usa `-P 16` por defecto (`ZIPALIGN_PAGE_KB` en `secrets.json`), que requiere **Build Tools 35 o superior**. Si el `zipalign` instalado no admite `-P` —el de Build Tools 34 no—, degrada a 4 KB, lo dice en el `warning` de la firma y lo refleja en `alignPageKb`.
+
+| | Build Tools 34 | Build Tools 35+ |
+|---|---|---|
+| Argumentos | `-p -f 4` | `-P 16 -f 4` |
+| Alineado de las `.so` | 4 KB | 16 KB |
+| Android 15+ | insuficiente | correcto |
+
+`/healthz` informa del valor efectivo en `zipalign_page_kb`.
+
 ## Traza de auditoría
 
 Cada evento se registra en `logs/app.jsonl` con:

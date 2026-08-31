@@ -19,6 +19,7 @@ source "${SCRIPT_DIR}/lib/common.sh"
 BACKUP_DIR="/var/backups/apk-signer"
 KEEP_BACKUPS="${KEEP_BACKUPS:-5}"
 SKIP_DEPS="${SKIP_DEPS:-0}"
+INSTALL_BUILD_TOOLS="${INSTALL_BUILD_TOOLS:-0}"
 BACKUP_PATH=""
 
 require_install() {
@@ -125,6 +126,26 @@ update_units() {
   fi
 }
 
+# update.sh no instala el SDK. Si falta la version de build-tools esperada se
+# avisa y se sigue con la mas nueva que haya; con INSTALL_BUILD_TOOLS=1 se
+# instala. Importa porque zipalign solo alinea a 16 KB desde build-tools 35.
+ensure_build_tools() {
+  if [[ -d "${SDK_ROOT}/build-tools/${BUILD_TOOLS_VERSION}" ]]; then
+    return 0
+  fi
+  local sdkmanager="${SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+  if [[ "${INSTALL_BUILD_TOOLS}" == "1" && -x "${sdkmanager}" ]]; then
+    log "Instalando build-tools ${BUILD_TOOLS_VERSION}..."
+    ANDROID_SDK_ROOT="${SDK_ROOT}" "${sdkmanager}" "build-tools;${BUILD_TOOLS_VERSION}" >/dev/null \
+      || warn "No se pudo instalar build-tools ${BUILD_TOOLS_VERSION}."
+    chown -R "${USER_NAME}:${USER_NAME}" "${SDK_ROOT}" 2>/dev/null || true
+  else
+    warn "build-tools ${BUILD_TOOLS_VERSION} no esta instalada."
+    warn "Se usara la mas nueva disponible. zipalign solo alinea a 16 KB desde la 35,"
+    warn "que Android 15+ exige. Para instalarla: sudo INSTALL_BUILD_TOOLS=1 bash update.sh"
+  fi
+}
+
 restart_and_check() {
   log "Reiniciando el servicio..."
   systemctl restart apk-signer.service
@@ -162,6 +183,7 @@ main() {
   systemctl stop apk-signer.service || true
 
   sync_code
+  ensure_build_tools
   merge_new_secret_keys
   update_tool_paths
   ensure_hmac_key

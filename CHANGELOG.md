@@ -7,6 +7,10 @@ y el proyecto sigue [Semantic Versioning](https://semver.org/lang/es/).
 
 ## [Unreleased]
 ### Added
+- Alineado a página de 16 KB (`zipalign -P 16`), que es lo que exige Android 15+ para librerías nativas sin comprimir. El `-p` clásico solo alinea a 4 KB. Configurable con `ZIPALIGN_PAGE_KB`; el valor efectivo se informa en `/healthz` (`zipalign_page_kb`) y en la respuesta de firma (`alignPageKb`).
+- Detección de capacidad: `-P` solo existe desde Build Tools 35. Si el binario instalado no lo admite, se degrada a 4 KB avisando en el `warning` de la firma, en vez de fallar. `-P` y `-p` son excluyentes, así que se pasa uno u otro.
+- `BUILD_TOOLS_VERSION` sube a 35.0.0, con resolución tolerante: si la versión configurada no está instalada se usa la más nueva disponible. `update.sh` acepta `INSTALL_BUILD_TOOLS=1` para instalarla.
+
 - `update.sh` para actualizar una instalación existente sin reinstalar: sincroniza código, actualiza dependencias Python, unidades de systemd y nginx, y conserva `secrets.json`, `users.json`, keystore, traza y sesiones. Hace copia de seguridad previa en `/var/backups/apk-signer/` y **revierte automáticamente** si el servicio no responde en `/healthz` tras el reinicio.
 - `update.sh` añade a `secrets.json` las claves nuevas de `secrets.example.json` sin tocar los valores existentes, de modo que una instalación antigua recibe las opciones nuevas al actualizar.
 - `lib/common.sh` con las funciones compartidas por `setup.sh` y `update.sh`.

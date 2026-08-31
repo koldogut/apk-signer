@@ -69,6 +69,7 @@ from config import (  # noqa: F401
     USERS_PATH,
     WORK_DIR,
     ZIPALIGN_BIN,
+    ZIPALIGN_PAGE_KB,
     check_bin,
     safe_mkdir,
     sha256_file,
@@ -76,6 +77,7 @@ from config import (  # noqa: F401
 )
 from signing import (  # noqa: F401
     _signed_filename,
+    zipalign_args,
     aapt_exists,
     inspect_apk_with_aapt,
     java_ok,
@@ -86,6 +88,7 @@ from signing import (  # noqa: F401
     save_session_meta,
     session_dir,
     valid_sid,
+    zipalign_supports_page_size,
 )
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
@@ -159,6 +162,8 @@ def healthz():
         "apksigner_jar_exists": check_bin(APKSIGNER_JAR),
         "zipalign_configured": bool(ZIPALIGN_BIN),
         "zipalign_exists": check_bin(ZIPALIGN_BIN),
+        "zipalign_page_kb": (ZIPALIGN_PAGE_KB
+                             if ZIPALIGN_PAGE_KB and zipalign_supports_page_size() else 4),
         "keystore_exists": check_bin(KEYSTORE_PATH),
         "secrets_exists": SECRETS_PATH.exists(),
         "secrets_error": SECRETS_ERROR or "",
@@ -396,14 +401,21 @@ def sign_ep():
     # se pueden mapear en memoria en el dispositivo.
     sign_input = in_path
     align_warning = ""
+    align_page_kb = 0
     if check_bin(ZIPALIGN_BIN):
         aligned_path = session_dir(sid) / "aligned.apk"
-        rc_a, out_a, err_a = run_cmd(
-            [ZIPALIGN_BIN, "-p", "-f", "4", str(in_path), str(aligned_path)],
-            timeout=120,
-        )
+        args_align, page_kb = zipalign_args(in_path, aligned_path)
+        rc_a, out_a, err_a = run_cmd(args_align, timeout=120)
         if rc_a == 0 and aligned_path.exists():
             sign_input = aligned_path
+            align_page_kb = page_kb
+            if ZIPALIGN_PAGE_KB and page_kb < ZIPALIGN_PAGE_KB:
+                # zipalign de build-tools 34 no admite -P: solo llega a 4 KB.
+                align_warning = (
+                    f"zipalign solo admite alineado a 4 KB; se pidieron "
+                    f"{ZIPALIGN_PAGE_KB} KB. Actualiza a build-tools 35 o superior "
+                    f"si firmas para Android 15+."
+                )
         else:
             align_warning = (err_a or out_a or f"zipalign falló (rc={rc_a})").strip()
             log_event("zipalign", ok=False, sessionId=sid, error=align_warning,
@@ -458,6 +470,7 @@ def sign_ep():
         "name": user.get("name", ""),
     }
     meta["aligned"] = sign_input != in_path
+    meta["alignPageKb"] = align_page_kb
     save_session_meta(sid, meta)
 
     log_event(
@@ -477,6 +490,7 @@ def sign_ep():
         "sessionId": sid,
         "signedName": signed_name,
         "aligned": meta["aligned"],
+        "alignPageKb": align_page_kb,
         "warning": align_warning,
         "stdout": out,
         "stderr": err

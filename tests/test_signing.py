@@ -75,11 +75,32 @@ class TestFirma:
         assert llamadas[0].startswith("zipalign")
         assert llamadas[1].startswith("java -jar")
 
-    def test_zipalign_usa_alineado_de_4_y_page_align(self, client, login, tool_calls):
+    def test_zipalign_pide_pagina_de_16kb(self, client, login, tool_calls, A):
+        """Android 15+ exige 16 KB; el viejo `-p` solo alinea a 4 KB."""
         sid = subir(client).get_json()["sessionId"]
-        client.post("/sign", json={"sessionId": sid}, headers=login())
-        za = next(linea for linea in tool_calls() if linea.startswith("zipalign"))
-        assert za.split()[1:4] == ["-p", "-f", "4"]
+        r = client.post("/sign", json={"sessionId": sid}, headers=login())
+        za = next(linea for linea in tool_calls() if linea.startswith("zipalign "))
+        assert "-P 16" in za
+        assert " -p " not in za, "-P y -p son excluyentes en zipalign"
+        assert za.split()[-3] == "4"
+        assert r.get_json()["alignPageKb"] == 16
+
+    def test_con_zipalign_antiguo_cae_a_4kb_y_avisa(self, client, login, tool_calls, A):
+        """build-tools 34 no admite -P: hay que degradar, no fallar."""
+        os.environ["FAKE_ZIPALIGN_OLD"] = "1"
+        import signing
+        signing._ZIPALIGN_SUPPORTS_PAGE_SIZE = None
+        try:
+            sid = subir(client).get_json()["sessionId"]
+            j = client.post("/sign", json={"sessionId": sid}, headers=login()).get_json()
+            za = next(linea for linea in tool_calls() if linea.startswith("zipalign "))
+            assert " -p " in za and "-P" not in za
+            assert j["ok"] is True and j["aligned"] is True
+            assert j["alignPageKb"] == 4
+            assert "build-tools 35" in j["warning"]
+        finally:
+            os.environ.pop("FAKE_ZIPALIGN_OLD", None)
+            signing._ZIPALIGN_SUPPORTS_PAGE_SIZE = None
 
     def test_se_firma_el_apk_alineado(self, client, login, tool_calls):
         sid = subir(client).get_json()["sessionId"]

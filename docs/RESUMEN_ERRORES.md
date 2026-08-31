@@ -276,3 +276,22 @@ git reset --hard origin/main
 > `reset --hard` descarta cambios locales del clon. Es seguro aquí porque el clon solo sirve para desplegar: la configuración y los datos viven en `/opt/apk-signer`, no en él.
 
 Los clones nuevos ya no lo sufren.
+
+## 30) La firma avisa de "zipalign solo admite alineado a 4 KB"
+
+**Causa:** `zipalign` de Android Build Tools 34 no admite `-P <pagesize_kb>`; su `-p` alinea únicamente a 4 KB. Android 15+ exige **16 KB** en dispositivos con páginas de ese tamaño, y Google Play lo requiere para apps que apunten a Android 15+.
+
+**Efecto:** el APK se firma y es válido, pero sus librerías nativas sin comprimir quedan alineadas a 4 KB. En un dispositivo con páginas de 16 KB, las `.so` no se pueden mapear directamente.
+
+**Solución:** instalar Build Tools 35 o superior y actualizar:
+
+```bash
+cd apk-signer && git pull
+sudo INSTALL_BUILD_TOOLS=1 bash update.sh
+```
+
+Comprueba después `zipalign_page_kb` en `/healthz` (debe ser 16) y que una firma devuelva `"alignPageKb": 16`.
+
+Para volver al comportamiento antiguo, pon `ZIPALIGN_PAGE_KB: 4` en `secrets.json` (o `0` para usar el `-p` clásico).
+
+> `-P` y `-p` son excluyentes: `zipalign` rechaza que se pasen juntos. El servicio elige uno u otro según lo que soporte el binario instalado.

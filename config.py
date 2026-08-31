@@ -52,6 +52,10 @@ SEC = _load_secrets()
 AAPT_BIN = str(SEC.get("AAPT", "")).strip()  # ruta absoluta a aapt2 o aapt
 APKSIGNER_JAR = str(SEC.get("APKSIGNER_JAR", "")).strip()
 ZIPALIGN_BIN = str(SEC.get("ZIPALIGN", "")).strip()
+# Tamano de pagina para alinear las .so sin comprimir, en KB. Android 15+ exige
+# 16 KB en dispositivos con paginas de ese tamano; el antiguo `-p` de zipalign
+# solo alinea a 4 KB. Con 0 se usa el comportamiento antiguo.
+ZIPALIGN_PAGE_KB = int(SEC.get("ZIPALIGN_PAGE_KB", 16))
 KEYSTORE_PATH = str(SEC.get("KEYSTORE_PATH", "")).strip()
 KS_PASS = str(SEC.get("KS_PASS", "")).strip()
 KEY_ALIAS = str(SEC.get("KEY_ALIAS", "")).strip()
