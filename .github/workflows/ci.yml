@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 es el minimo declarado (y el del Dockerfile); 3.12 vigila que
+        # no se rompa nada con la siguiente.
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: Ejecutar tests
+        run: pytest
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: ruff
+        run: ruff check .
+      - name: Validar sintaxis de shell
+        run: bash -n setup.sh
+      - name: Validar JSON de ejemplo
+        run: python -c "import json; json.load(open('secrets.example.json'))"
+
+  security:
+    name: Seguridad
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # DEBE ser la version MINIMA soportada, no la mas nueva: pip resuelve
+          # dependencias distintas segun la version de Python, y auditar solo en
+          # la mas nueva oculta vulnerabilidades que si afectan al minimo.
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: bandit
+        # B101 (assert) se excluye solo en tests, donde es su forma normal.
+        run: bandit -r . -x ./tests,./.venv,./venv -ll
+      - name: pip-audit
+        run: pip-audit -r requirements.txt --strict
+
+  nginx:
+    name: Configuracion de nginx
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validar apk-signer.conf
+        # Se monta un http{} minimo alrededor del fichero para poder pasar
+        # `nginx -t`, junto con un certificado autofirmado de usar y tirar.
+        run: |
+          sudo apt-get update && sudo apt-get install -y nginx openssl
+          sudo mkdir -p /etc/ssl/apk-signer
+          sudo openssl req -x509 -nodes -newkey rsa:2048 -days 1 \
+            -keyout /etc/ssl/apk-signer/apk-signer.key \
+            -out /etc/ssl/apk-signer/apk-signer.crt \
+            -subj "/CN=ci.local" >/dev/null 2>&1
+          sudo cp nginx/apk-signer.conf /etc/nginx/sites-available/apk-signer
+          sudo ln -sf /etc/nginx/sites-available/apk-signer /etc/nginx/sites-enabled/apk-signer
+          sudo rm -f /etc/nginx/sites-enabled/default
+          sudo nginx -t

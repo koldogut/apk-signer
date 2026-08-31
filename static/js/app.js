@@ -43,9 +43,14 @@
   const permsFull = el("permsFull");
   const btnCopyPerms = el("btnCopyPerms");
 
+  const sessionInfo = el("sessionInfo");
+  const btnLogout = el("btnLogout");
+
   const btnOpenLogs = el("btnOpenLogs");
   const modalLogs = el("modalLogs");
   const btnRefreshLogs = el("btnRefreshLogs");
+  const btnVerifyChain = el("btnVerifyChain");
+  const chainResult = el("chainResult");
   const logsTbody = el("logsTbody");
   const systemNotice = el("systemNotice");
 
@@ -58,6 +63,7 @@
   let currentPerms = [];
   let busy = false;
   let lastInspectSig = ""; // evita doble POST por el mismo fichero
+  let auth = { token: "", expiresAt: 0, user: null }; // solo en memoria
 
   // ----------------------------
   // Debug + output
@@ -332,17 +338,123 @@
   // ----------------------------
   // Sign / Verify / Download
   // ----------------------------
-  async function sign() {
-    if (busy) return;
-    if (!currentSessionId) return;
 
+  // Firmar, descargar y consultar logs exigen token + MFA. Devuelve null y
+  // avisa por UI si falta alguno.
+  function readCreds() {
     const userToken = (tokenInput.value || "").trim();
     const mfaCode = (mfaInput.value || "").trim();
     if (!userToken || !mfaCode) {
       setStatus("warn", "MFA requerido");
-      setOutput("Introduce el token y el código MFA antes de firmar.");
-      return;
+      setOutput("Introduce el token de usuario y el código MFA.\n");
+      return null;
     }
+    return { userToken, mfaCode };
+  }
+
+  // ----------------------------
+  // Sesión de autenticación
+  //
+  // El código MFA se canjea UNA vez por una sesión corta. Se guarda solo en
+  // memoria: ni localStorage ni cookie, para que no sobreviva a la pestaña.
+  // ----------------------------
+  function sessionValid() {
+    return Boolean(auth.token) && Date.now() < auth.expiresAt - 5000;
+  }
+
+  function clearSession() {
+    auth = { token: "", expiresAt: 0, user: null };
+    updateSessionUi();
+  }
+
+  function updateSessionUi() {
+    if (!sessionInfo || !btnLogout) return;
+    if (sessionValid()) {
+      const hh = new Date(auth.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      sessionInfo.textContent = `${auth.user?.name || "Sesión"} · hasta ${hh}`;
+      sessionInfo.classList.remove("hidden");
+      btnLogout.classList.remove("hidden");
+    } else {
+      sessionInfo.classList.add("hidden");
+      btnLogout.classList.add("hidden");
+    }
+  }
+
+  async function ensureSession() {
+    if (sessionValid()) return auth.token;
+
+    const creds = readCreds();
+    if (!creds) return null;
+
+    dbg("LOGIN request");
+    try {
+      const j = await apiFetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(creds),
+      }, 20000);
+
+      if (!j.ok) throw new Error(j.error || "Login rechazado");
+
+      auth = {
+        token: j.authToken,
+        expiresAt: new Date(j.expiresAt).getTime(),
+        user: j.user || null,
+      };
+      // El código ya está canjeado: no sirve para nada dejarlo en pantalla.
+      mfaInput.value = "";
+      updateSessionUi();
+      dbg("LOGIN ok", { user: j.user?.id, expiresAt: j.expiresAt });
+      return auth.token;
+    } catch (e) {
+      clearSession();
+      dbg("LOGIN error", { message: e.message, status: e.status || "" });
+      setStatus("bad", "Error");
+      setOutput(`No se pudo iniciar sesión: ${e.message}\n`);
+      return null;
+    }
+  }
+
+  // Envuelve apiFetch añadiendo la sesión. Si el backend la rechaza, se
+  // descarta y se pide MFA de nuevo en lugar de reintentar en bucle.
+  async function authFetch(url, body, timeoutMs = 120000) {
+    const token = await ensureSession();
+    if (!token) return null;
+    try {
+      return await apiFetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify(body || {}),
+      }, timeoutMs);
+    } catch (e) {
+      if (e.status === 403) {
+        clearSession();
+        setOutput("La sesión ha caducado. Introduce un código MFA nuevo.\n", true);
+      }
+      throw e;
+    }
+  }
+
+  async function doLogout() {
+    const token = auth.token;
+    clearSession();
+    mfaInput.value = "";
+    if (!token) return;
+    try {
+      await apiFetch("/api/auth/logout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ authToken: token }),
+      }, 15000);
+      setStatus("idle", "Sesión cerrada");
+    } catch (e) {
+      dbg("LOGOUT error", { message: e.message });
+    }
+  }
+
+  async function sign() {
+    if (busy) return;
+    if (!currentSessionId) return;
 
     setBusy(true);
     setStatus("busy", "Firmando");
@@ -350,11 +462,8 @@
     dbg("SIGN request", { sessionId: currentSessionId });
 
     try {
-      const j = await apiFetch("/sign", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: currentSessionId, userToken, mfaCode }),
-      }, 240000);
+      const j = await authFetch("/sign", { sessionId: currentSessionId }, 240000);
+      if (!j) { setStatus("warn", "MFA requerido"); return; }
 
       dbg("SIGN response", j);
 
@@ -367,7 +476,8 @@
 
       currentSignedName = j.signedName || "";
       setStatus("ok", "Firma correcta");
-      setOutput(`Firma correcta\n${(j.stdout || "").trim()}\n${(j.stderr || "").trim()}`.trim() + "\n");
+      const alignLine = j.aligned ? "APK alineado (zipalign) antes de firmar." : `Aviso: ${j.warning || "APK sin alinear"}.`;
+      setOutput(`Firma correcta\n${alignLine}\n${(j.stdout || "").trim()}\n${(j.stderr || "").trim()}`.trim() + "\n");
 
       enableAfterSign();
     } catch (e) {
@@ -416,11 +526,54 @@
     }
   }
 
-  function downloadSigned() {
-    if (!currentSessionId) return;
-    const url = `/download/${encodeURIComponent(currentSessionId)}`;
-    dbg("DOWNLOAD", { url });
-    window.location.href = url;
+  // La descarga es un POST autenticado: el sessionId por si solo ya no da
+  // acceso al APK firmado, hacen falta token + MFA del usuario que firmo.
+  async function downloadSigned() {
+    if (!currentSessionId || busy) return;
+
+    const token = await ensureSession();
+    if (!token) return;
+
+    dbg("DOWNLOAD", { sessionId: currentSessionId });
+    setBusy(true);
+    try {
+      const res = await fetch("/download", {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify({ sessionId: currentSessionId }),
+      });
+
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try {
+          const j = await res.json();
+          msg = j.error || msg;
+        } catch { /* respuesta no JSON */ }
+        if (res.status === 403) clearSession();
+        throw new Error(msg);
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = currentSignedName || "signed.apk";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+      setStatus("ok", "Descargado");
+      setOutput(`Descargado ${a.download}\n`, true);
+    } catch (e) {
+      dbg("DOWNLOAD error", { message: e.message });
+      setStatus("bad", "Error");
+      setOutput(`Error descargando: ${e.message}\n`, true);
+    } finally {
+      setBusy(false);
+    }
   }
 
   // ----------------------------
@@ -429,12 +582,36 @@
   function openModal(modal) { modal.classList.remove("hidden"); }
   function closeModal(modal) { modal.classList.add("hidden"); }
 
+  function logsMessage(text) {
+    logsTbody.innerHTML = "";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td colspan="7">${escapeHtml(text)}</td>`;
+    logsTbody.appendChild(tr);
+  }
+
   async function loadLogs() {
     dbg("LOGS load");
     logsTbody.innerHTML = "";
+
+    if (!sessionValid() && !(tokenInput.value || "").trim()) {
+      logsMessage("Introduce el token de usuario y el código MFA en la pantalla principal para ver la traza.");
+      return;
+    }
+
     try {
-      const j = await apiFetch("/logs/data?limit=200", { method: "GET" }, 20000);
-      if (!j.ok) throw new Error("No ok");
+      const j = await authFetch("/logs/data", { limit: 200 }, 20000);
+      if (!j) {
+        logsMessage("Introduce el token de usuario y el código MFA en la pantalla principal para ver la traza.");
+        return;
+      }
+      if (!j.ok) throw new Error(j.error || "No ok");
+
+      if (!(j.events || []).length) {
+        logsMessage(j.scope === "own"
+          ? "No hay eventos registrados a tu nombre."
+          : "No hay eventos registrados.");
+        return;
+      }
 
       for (const evt of (j.events || [])) {
         const tr = document.createElement("tr");
@@ -529,11 +706,55 @@
   btnVerify.addEventListener("click", verify);
   btnDownload.addEventListener("click", downloadSigned);
 
-  btnReset.addEventListener("click", () => {
+  btnReset.addEventListener("click", async () => {
     tokenInput.value = "";
     mfaInput.value = "";
+    await doLogout();
     resetUi();
   });
+
+  btnLogout.addEventListener("click", doLogout);
+
+  // Verificacion completa de la traza: recorre el fichero comprobando MAC y
+  // encadenado. Solo admin.
+  async function verifyChain() {
+    if (!chainResult) return;
+    chainResult.classList.remove("hidden");
+    chainResult.textContent = "Verificando la traza completa...";
+    try {
+      const j = await authFetch("/logs/verify", {}, 60000);
+      if (!j) {
+        chainResult.textContent = "Introduce token y código MFA para verificar la traza.";
+        return;
+      }
+      const s = j.summary || {};
+      if (s.ok) {
+        const desde = s.continuesFrom ? ` Continúa la cadena de ${s.continuesFrom}.` : "";
+        // Los eventos anteriores a configurar LOG_HMAC_KEY no llevan MAC y no
+        // se pueden sellar a posteriori: conviene decirlo, no solo dar el conteo.
+        const sinSellar = s.macMissing
+          ? ` ${s.macMissing} evento(s) sin MAC, anteriores a la clave actual: esos no están protegidos.`
+          : "";
+        chainResult.textContent =
+          `Traza íntegra: ${s.events} eventos, ${s.macOk} con MAC verificado, sin roturas de cadena.${desde}${sinSellar}`;
+      } else if (!s.hasKey) {
+        chainResult.textContent =
+          `SIN SELLAR: ${s.warning || "no hay LOG_HMAC_KEY configurada"}. ` +
+          `Genera una clave en secrets.json y reinicia el servicio.`;
+      } else {
+        const partes = [];
+        if (s.macBad?.length) partes.push(`${s.macBad.length} evento(s) modificados`);
+        if (s.chainBad?.length) partes.push(`${s.chainBad.length} rotura(s) de cadena`);
+        if (s.unreadable) partes.push(`${s.unreadable} línea(s) ilegibles`);
+        if (!s.hasKey) partes.push("no hay LOG_HMAC_KEY configurada");
+        chainResult.textContent =
+          `ATENCIÓN: ${partes.join(", ")}. Primer problema en el evento #${s.firstProblemSeq ?? "?"}.`;
+      }
+    } catch (e) {
+      chainResult.textContent = `No se pudo verificar: ${e.message}`;
+    }
+  }
+  btnVerifyChain.addEventListener("click", verifyChain);
 
   btnCopyOutput.addEventListener("click", async () => {
     const ok = await copyText(output.textContent || "");

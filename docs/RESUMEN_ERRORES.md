@@ -67,3 +67,237 @@ sudo chown -R apk-signer:apk-signer /opt/apk-signer
 ```bash
 sudo -E /opt/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses
 ```
+
+## 11) El navegador avisa de "conexión no privada" / certificado no válido
+
+**Causa:** `setup.sh` generó un certificado autofirmado porque no había uno en `/etc/ssl/apk-signer/`.
+
+**Solución:** sustituye `apk-signer.crt` y `apk-signer.key` por el certificado corporativo y recarga nginx (`sudo nginx -t && sudo systemctl reload nginx`). Ver la sección "Certificado TLS" del README.
+
+## 12) `nginx -t` falla con "cannot load certificate"
+
+**Causa:** faltan `/etc/ssl/apk-signer/apk-signer.crt` o `.key`, o nginx (usuario `www-data`) no puede leer la clave.
+
+**Solución:** vuelve a ejecutar `setup.sh`, o genera el certificado a mano. Comprueba permisos:
+
+```bash
+sudo ls -l /etc/ssl/apk-signer/
+sudo chown root:www-data /etc/ssl/apk-signer/apk-signer.key
+sudo chmod 0640 /etc/ssl/apk-signer/apk-signer.key
+```
+
+## 13) Error "La sesión pertenece a otro usuario" al descargar
+
+**Causa:** la descarga está atada al usuario que firmó. Estás usando un token distinto al que se usó para firmar esa sesión.
+
+**Solución:** descarga con el token del firmante, o con un token de administrador.
+
+## 14) El modal de Logs pide token y MFA / aparece vacío
+
+**Causa:** `/logs/data` ya no es anónimo. Además, un usuario sin rol `admin` solo ve sus propios eventos.
+
+**Solución:** introduce token y código MFA en la pantalla principal antes de abrir Logs. Para ver la traza completa, usa un token de administrador.
+
+## 15) Error 405 al llamar a `GET /logs/data` o `GET /download/<sessionId>`
+
+**Causa:** ambos endpoints pasaron a ser `POST` con credenciales en el cuerpo. Los `GET` anónimos se eliminaron.
+
+**Solución:** actualiza el cliente o script a `POST /logs/data` y `POST /download` enviando `userToken` y `mfaCode`. Ver la tabla "Control de acceso" del README.
+
+## 16) Error "Ese código MFA ya se ha usado. Espera al siguiente."
+
+**Causa:** el anti-replay solo permite canjear cada código TOTP una vez. Estás reutilizando uno que ya abrió sesión, o uno de un periodo anterior.
+
+**Solución:** espera al siguiente código del autenticador. Recuerda que ya no hace falta un código por operación: la sesión que abres cubre firmar, verificar, descargar y consultar la traza durante `AUTH_TTL_MINUTES` (15 min por defecto).
+
+## 17) Error 429 "Demasiados intentos fallidos"
+
+**Causa:** se superaron `MAX_AUTH_FAILURES` (5) intentos de login fallidos. El bloqueo dura `AUTH_LOCKOUT_MINUTES` (15) y aplica aunque después se acierte el código.
+
+**Solución:** espera a que expire. Si es un bloqueo legítimo que hay que levantar ya, borra la entrada del usuario en el fichero de estado y reinicia el servicio:
+
+```bash
+sudo -u apk-signer cat /opt/apk-signer/work/auth_state.json | jq .failures
+sudo systemctl stop apk-signer
+sudo -u apk-signer rm /opt/apk-signer/work/auth_state.json
+sudo systemctl start apk-signer
+```
+
+> Borrar ese fichero también cierra todas las sesiones activas y reinicia el anti-replay.
+
+Si el 429 llega sin haber fallado nada, es el rate limiting de nginx: revisa `limit_req` en `nginx/apk-signer.conf`.
+
+## 18) Error "Sesión inválida o caducada"
+
+**Causa:** la sesión duró más de `AUTH_TTL_MINUTES`, se cerró con "Cerrar sesión", o el servicio se reinició y se limpió el estado.
+
+**Solución:** introduce token y un código MFA nuevo. Para sesiones más largas, sube `AUTH_TTL_MINUTES` en `secrets.json`.
+
+## 19) La firma avisa de "APK sin alinear"
+
+**Causa:** `ZIPALIGN` no está en `secrets.json`, el binario no existe, o `zipalign` devolvió error.
+
+**Solución:** comprueba `zipalign_exists` en `/healthz` y apunta `ZIPALIGN` al binario **dentro del SDK**:
+
+```bash
+ls -l /opt/android-sdk/build-tools/*/zipalign
+sudo -u apk-signer jq '.ZIPALIGN="/opt/android-sdk/build-tools/35.0.0/zipalign"' \
+  /opt/apk-signer/secrets.json > /tmp/s.json && sudo mv /tmp/s.json /opt/apk-signer/secrets.json
+sudo chown apk-signer:apk-signer /opt/apk-signer/secrets.json
+sudo chmod 600 /opt/apk-signer/secrets.json
+sudo systemctl restart apk-signer
+```
+
+> **No copies `zipalign` fuera del SDK**: enlaza contra `lib64/libc++.so` y ahí falla (ver entrada 26). `update.sh` ya deja la ruta correcta.
+
+## 20) El servicio no arranca tras endurecer systemd
+
+**Causa:** alguna directiva de aislamiento choca con el entorno. Las sospechosas, por orden: `SystemCallFilter`, `RestrictAddressFamilies`, `ProtectSystem=strict`.
+
+**Solución:** mira el motivo exacto y prueba a comentar la directiva señalada:
+
+```bash
+sudo journalctl -u apk-signer.service -n 100 --no-pager
+sudo systemd-analyze security apk-signer.service
+```
+
+Si el fallo aparece al firmar y no al arrancar, casi siempre es la JVM: comprueba que **no** se ha añadido `MemoryDenyWriteExecute=true`, que es incompatible con el JIT de Java.
+
+## 21) La IP de la traza sale como 127.0.0.1
+
+**Causa:** `TRUSTED_PROXIES` está a 0, o nginx no envía `X-Forwarded-For`.
+
+**Solución:** con nginx delante, `TRUSTED_PROXIES` debe ser 1. Si añades otro proxy o balanceador por delante, súbelo al número real de saltos: un valor mayor del real permitiría falsificar la IP con una cabecera.
+
+## 22) "Verificar cadena" informa de roturas
+
+**Causa:** la traza no cuadra. Distingue entre:
+
+* **eventos modificados** (`macBad`): alguien cambió el contenido de una línea;
+* **roturas de cadena** (`chainBad`): se borraron o reordenaron eventos;
+* **líneas ilegibles** (`unreadable`): JSON corrupto, normalmente por un disco lleno o un corte durante la escritura;
+* **"sin cadena"**: eventos anteriores a la versión 1.8.0, que no llevaban `prev`. Es esperado en trazas antiguas y no indica manipulación.
+
+**Solución:** `firstProblemSeq` señala el primer evento afectado; a partir de ahí la traza ya no prueba nada. Conserva el fichero como evidencia antes de tocarlo:
+
+```bash
+sudo cp /opt/apk-signer/logs/app.jsonl /var/tmp/app.jsonl.evidencia
+sudo ls -l /opt/apk-signer/logs/
+```
+
+Si la cadena se rompe justo en el primer evento y este es `log-rotated`, no es una rotura: es el enlace normal con el fichero rotado, y el resumen lo indica en `continuesFrom`.
+
+## 23) El resumen dice `hasKey: false`
+
+**Causa:** no hay `LOG_HMAC_KEY` en `secrets.json`, así que los eventos no llevan MAC.
+
+**Solución:** genera una clave y reinicia el servicio. Los eventos ya escritos no se pueden sellar retroactivamente:
+
+```bash
+python3 -c "import os;print(os.urandom(32).hex())"
+```
+
+## 24) Los tests fallan con "No existe secrets.json"
+
+**Causa:** se está ejecutando `pytest` sin las dependencias de desarrollo, o desde un directorio distinto de la raíz del repo.
+
+**Solución:**
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+Los tests montan su propia configuración en un directorio temporal vía `CREDENTIALS_DIRECTORY`: no usan ni modifican el `secrets.json` de la máquina.
+
+## 25) `setup.sh` aborta con "Se requiere Python 3.11 o superior"
+
+**Causa:** el Python del sistema es anterior. Debian 11 trae 3.9 y Ubuntu 22.04 trae 3.10.
+
+**Motivo del mínimo:** por debajo de 3.11 no hay versión de `pillow` sin vulnerabilidades conocidas —los parches exigen 3.10+— ni de `click`. `pillow` entra por `qrcode[pil]`, que solo genera el PNG del QR de MFA, así que el riesgo real es bajo, pero `pip-audit` no puede quedar en verde.
+
+**Solución:** instala un Python 3.11 aparte y ejecuta el instalador con él por delante en el `PATH`:
+
+```bash
+sudo add-apt-repository ppa:deadsnakes/ppa
+sudo apt-get update && sudo apt-get install -y python3.11 python3.11-venv
+sudo PATH="/usr/bin:$PATH" bash setup.sh
+```
+
+Comprueba qué versión se está usando con `python3 --version` antes de lanzar el script.
+
+## 26) La firma avisa de "error while loading shared libraries: libc++.so"
+
+**Causa:** una instalación anterior copiaba `zipalign` a `/opt/apk-signer/tools/`. Ese binario enlaza dinámicamente contra `lib64/libc++.so`, que vive dentro del directorio de Build Tools, así que fuera de ahí no arranca. `aapt2` no da el problema porque va enlazado estáticamente.
+
+**Efecto:** la firma continuaba, pero **sin alinear el APK** y avisando en la respuesta y en la traza.
+
+**Solución:** `setup.sh` y `update.sh` ya apuntan `ZIPALIGN` al binario dentro del SDK y borran la copia rota. Si vienes de una instalación antigua, basta con actualizar:
+
+```bash
+cd apk-signer && git pull && sudo bash update.sh
+```
+
+Comprueba después que `zipalign_exists` es `true` en `/healthz` y que una firma devuelve `"aligned": true`.
+
+## 27) "Verificar cadena" dice SIN SELLAR
+
+**Causa:** `LOG_HMAC_KEY` no está configurada, o conserva el valor de ejemplo. Los eventos se escriben sin `mac`, y entonces el encadenado por sí solo no prueba nada: quien pueda escribir el fichero lo reescribe entero y recalcula los hashes.
+
+**Solución:** `setup.sh` y `update.sh` generan una clave automáticamente si no hay una válida. A mano:
+
+```bash
+sudo -u apk-signer python3 -c "import os;print(os.urandom(32).hex())"
+# copiar el valor a LOG_HMAC_KEY en /opt/apk-signer/secrets.json
+sudo systemctl restart apk-signer
+```
+
+> Los eventos anteriores a configurar la clave no se pueden sellar retroactivamente: seguirán apareciendo como "Sin MAC".
+
+## 28) `update.sh` revierte la actualización
+
+**Causa:** tras actualizar, el servicio no respondió en `/healthz` dentro de 30 s. El script restauró la copia previa y volvió a arrancar la versión anterior.
+
+**Solución:** el propio script vuelca los últimos registros antes de revertir. Para investigar:
+
+```bash
+sudo journalctl -u apk-signer.service -n 100 --no-pager
+ls -l /var/backups/apk-signer/
+```
+
+Sospechosos habituales: una dependencia nueva que no instaló bien, `secrets.json` con una clave nueva mal rellenada, o una directiva de systemd incompatible (ver entrada 20).
+
+## 29) `git pull` falla con "Los cambios locales serán sobrescritos" en `systemd/apk-signer-cleanup.timer`
+
+**Causa:** ese fichero se quedó con CRLF en el repositorio mientras `.gitattributes` declara `*.timer text eol=lf`. Git lo convertía al hacer checkout y quedaba marcado como modificado sin que nadie lo tocara. Corregido, pero un clon hecho **antes** del arreglo arrastra el problema una vez.
+
+**Solución:** en el clon afectado, descarta el estado local y alinéalo con el remoto:
+
+```bash
+cd apk-signer
+git fetch origin
+git reset --hard origin/main
+```
+
+> `reset --hard` descarta cambios locales del clon. Es seguro aquí porque el clon solo sirve para desplegar: la configuración y los datos viven en `/opt/apk-signer`, no en él.
+
+Los clones nuevos ya no lo sufren.
+
+## 30) La firma avisa de "zipalign solo admite alineado a 4 KB"
+
+**Causa:** `zipalign` de Android Build Tools 34 no admite `-P <pagesize_kb>`; su `-p` alinea únicamente a 4 KB. Android 15+ exige **16 KB** en dispositivos con páginas de ese tamaño, y Google Play lo requiere para apps que apunten a Android 15+.
+
+**Efecto:** el APK se firma y es válido, pero sus librerías nativas sin comprimir quedan alineadas a 4 KB. En un dispositivo con páginas de 16 KB, las `.so` no se pueden mapear directamente.
+
+**Solución:** instalar Build Tools 35 o superior y actualizar:
+
+```bash
+cd apk-signer && git pull
+sudo INSTALL_BUILD_TOOLS=1 bash update.sh
+```
+
+Comprueba después `zipalign_page_kb` en `/healthz` (debe ser 16) y que una firma devuelva `"alignPageKb": 16`.
+
+Para volver al comportamiento antiguo, pon `ZIPALIGN_PAGE_KB: 4` en `secrets.json` (o `0` para usar el `-p` clásico).
+
+> `-P` y `-p` son excluyentes: `zipalign` rechaza que se pasen juntos. El servicio elige uno u otro según lo que soporte el binario instalado.

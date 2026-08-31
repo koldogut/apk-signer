@@ -1,0 +1,29 @@
+# Secretos y material criptográfico — NUNCA deben subirse
+secrets.json
+users.json
+keystore/*.jks
+keystore/*.p12
+keystore/*.keystore
+!keystore/*.dummy
+*.pem
+*.key
+*.crt
+admin-qr.png
+
+# Datos de ejecución
+work/
+logs/
+android-sdk/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# Sistema
+.DS_Store

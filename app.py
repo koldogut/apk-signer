@@ -1,331 +1,111 @@
 #!/usr/bin/env python3
+"""
+Punto de entrada: la aplicacion Flask y sus rutas.
+
+La logica vive en config/audit/auth/signing; aqui solo queda el transporte
+HTTP. Se reexporta lo que consumen los tests y las herramientas externas para
+que `import app` siga siendo suficiente.
+"""
 import base64
-import hashlib
-import hmac
-import io
 import json
 import os
-import re
 import secrets
 import shutil
 import subprocess
 import time
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import quote
+from typing import Any, Dict, List
 
-import qrcode
-from flask import Flask, jsonify, request, send_from_directory, send_file, abort
+from flask import Flask, jsonify, request, send_file, send_from_directory
+from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
+from werkzeug.middleware.proxy_fix import ProxyFix
 
-BASE_DIR = Path(__file__).resolve().parent
-SECRETS_PATH = BASE_DIR / "secrets.json"
-SECRETS_MISSING = False
-SECRETS_ERROR: Optional[str] = None
+from audit import (  # noqa: F401  (reexportado para tests y herramientas)
+    client_ip,
+    event_hash,
+    log_event,
+    verify_event_mac,
+    verify_log_chain,
+)
+from auth import (  # noqa: F401
+    AuthLocked,
+    _auth_state,
+    _hash_token,
+    _totp_code,
+    build_otpauth_uri,
+    find_user_by_token,
+    load_users,
+    login,
+    logout,
+    make_qr_data_url,
+    require_session,
+    save_users,
+    verify_totp_counter,
+)
+# Se reexporta la configuracion entera: los tests y las herramientas del repo
+# acceden a ella como `app.<CONSTANTE>`.
+from config import (  # noqa: F401
+    AAPT_BIN,
+    APKSIGNER_JAR,
+    AUTH_LOCKOUT_MINUTES,
+    AUTH_STATE_PATH,
+    AUTH_TTL_MINUTES,
+    HMAC_KEY,
+    KEY_ALIAS,
+    KEY_PASS,
+    KEYSTORE_PATH,
+    KS_PASS,
+    LOG_DIR,
+    LOG_FILE,
+    LOG_MAX_LINES,
+    MAX_AUTH_FAILURES,
+    MAX_CONTENT_LENGTH,
+    SECRETS_ERROR,
+    SECRETS_MISSING,
+    SECRETS_PATH,
+    SESSION_TTL_HOURS,
+    SYSLOG_ADDRESS,
+    TRUSTED_PROXIES,
+    USERS_PATH,
+    WORK_DIR,
+    ZIPALIGN_BIN,
+    ZIPALIGN_PAGE_KB,
+    check_bin,
+    safe_mkdir,
+    sha256_file,
+    utc_now_iso,
+)
+from signing import (  # noqa: F401
+    _signed_filename,
+    zipalign_args,
+    aapt_exists,
+    inspect_apk_with_aapt,
+    java_ok,
+    load_session_meta,
+    new_session_id,
+    run_cmd,
+    safe_apk_name,
+    save_session_meta,
+    session_dir,
+    valid_sid,
+    zipalign_supports_page_size,
+)
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 
-# ----------------------------
-# Config / secrets
-# ----------------------------
-def _load_secrets() -> Dict[str, Any]:
-    global SECRETS_MISSING, SECRETS_ERROR
-    if not SECRETS_PATH.exists():
-        SECRETS_MISSING = True
-        SECRETS_ERROR = f"No existe {SECRETS_PATH}. Crea secrets.json a partir de secrets.example.json"
-        return {}
-    try:
-        return json.loads(SECRETS_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
-        SECRETS_ERROR = f"secrets.json inválido: {e}"
-        return {}
-
-SEC = _load_secrets()
-
-AAPT_BIN = str(SEC.get("AAPT", "")).strip()  # ruta absoluta a aapt2 o aapt
-APKSIGNER_JAR = str(SEC.get("APKSIGNER_JAR", "")).strip()
-KEYSTORE_PATH = str(SEC.get("KEYSTORE_PATH", "")).strip()
-KS_PASS = str(SEC.get("KS_PASS", "")).strip()
-KEY_ALIAS = str(SEC.get("KEY_ALIAS", "")).strip()
-KEY_PASS = str(SEC.get("KEY_PASS", "")).strip()
-
-WORK_DIR = Path(str(SEC.get("WORK_DIR", str(BASE_DIR / "work"))))
-LOG_DIR = Path(str(SEC.get("LOG_DIR", str(BASE_DIR / "logs"))))
-USERS_PATH = Path(str(SEC.get("USERS_PATH", str(BASE_DIR / "users.json"))))
-MAX_CONTENT_LENGTH = int(SEC.get("MAX_CONTENT_LENGTH", 100 * 1024 * 1024))  # 100MB default
-SESSION_TTL_HOURS = int(SEC.get("SESSION_TTL_HOURS", 24))
-LOG_MAX_LINES = int(SEC.get("LOG_MAX_LINES", 2000))
 
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 
-LOG_FILE = LOG_DIR / "app.jsonl"
-
-def _hmac_key_bytes() -> Optional[bytes]:
-    raw = str(SEC.get("LOG_HMAC_KEY", "")).strip()
-    if not raw:
-        return None
-    try:
-        # admite hex de 32 bytes (64 chars) o base64
-        if re.fullmatch(r"[0-9a-fA-F]{64}", raw):
-            return bytes.fromhex(raw)
-        return base64.b64decode(raw)
-    except Exception:
-        return None
-
-HMAC_KEY = _hmac_key_bytes()
-
-# ----------------------------
-# Helpers
-# ----------------------------
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-def safe_mkdir(p: Path) -> None:
-    p.mkdir(parents=True, exist_ok=True)
-
-def sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-def check_bin(path: str) -> bool:
-    return bool(path) and Path(path).exists()
-
-def run_cmd(args: List[str], timeout: int = 60) -> Tuple[int, str, str]:
-    p = subprocess.run(
-        args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=timeout,
+if TRUSTED_PROXIES > 0:
+    # Sin esto, cualquiera falsifica la IP de la traza con una cabecera
+    # X-Forwarded-For. ProxyFix solo confía en los N saltos declarados.
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app,
+        x_for=TRUSTED_PROXIES,
+        x_proto=TRUSTED_PROXIES,
+        x_host=0,
+        x_prefix=0,
     )
-    return p.returncode, p.stdout, p.stderr
-
-def new_session_id() -> str:
-    # URL-safe, corto, suficiente para sesiones temporales
-    return secrets.token_urlsafe(12)
-
-def session_dir(sid: str) -> Path:
-    return WORK_DIR / "sessions" / sid
-
-def session_meta_path(sid: str) -> Path:
-    return session_dir(sid) / "meta.json"
-
-def load_session_meta(sid: str) -> Dict[str, Any]:
-    mp = session_meta_path(sid)
-    if not mp.exists():
-        raise FileNotFoundError("Sesión no encontrada o expirada")
-    return json.loads(mp.read_text(encoding="utf-8"))
-
-def save_session_meta(sid: str, meta: Dict[str, Any]) -> None:
-    session_meta_path(sid).write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-def client_ip() -> str:
-    # si detrás de proxy, ajustar a tu realidad. Por defecto, REMOTE_ADDR.
-    return request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.remote_addr or ""
-
-def _canon_json(obj: Dict[str, Any]) -> bytes:
-    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
-
-def log_event(action: str, ok: bool, **fields: Any) -> None:
-    """
-    Logging best-effort. NUNCA debe tumbar la app si hay permisos/FS raros.
-    """
-    try:
-        safe_mkdir(LOG_DIR)
-        if not LOG_FILE.exists():
-            # evita el “primer arranque 500” si falta el fichero
-            LOG_FILE.touch()
-        evt: Dict[str, Any] = {
-            "ts": utc_now_iso(),
-            "action": action,
-            "ok": bool(ok),
-            "ip": client_ip(),
-            "ua": request.headers.get("User-Agent", ""),
-        }
-        for k, v in fields.items():
-            evt[k] = v
-        if HMAC_KEY:
-            to_mac = dict(evt)
-            to_mac.pop("mac", None)
-            mac = hmac.new(HMAC_KEY, _canon_json(to_mac), hashlib.sha256).hexdigest()
-            evt["mac"] = mac
-
-        with LOG_FILE.open("a", encoding="utf-8") as fp:
-            fp.write(json.dumps(evt, ensure_ascii=False) + "\n")
-    except Exception:
-        # silencio deliberado: logs no pueden romper funcionalidad.
-        pass
-
-def verify_event_mac(evt: Dict[str, Any]) -> Tuple[str, bool]:
-    """
-    Devuelve (estado, ok_verificacion)
-    estado: "OK", "Fallo", "Sin MAC", "Sin clave"
-    """
-    mac = evt.get("mac")
-    if not mac:
-        return ("Sin MAC", False)
-    if not HMAC_KEY:
-        return ("Sin clave", False)
-    try:
-        to_mac = dict(evt)
-        to_mac.pop("mac", None)
-        expected = hmac.new(HMAC_KEY, _canon_json(to_mac), hashlib.sha256).hexdigest()
-        return ("OK" if hmac.compare_digest(str(mac), expected) else "Fallo", hmac.compare_digest(str(mac), expected))
-    except Exception:
-        return ("Fallo", False)
-
-def _base32_decode(secret: str) -> bytes:
-    cleaned = re.sub(r"\s+", "", secret or "").upper()
-    padding = "=" * ((8 - len(cleaned) % 8) % 8)
-    return base64.b32decode(cleaned + padding)
-
-def _totp_code(secret: str, for_time: Optional[int] = None, step: int = 30, digits: int = 6) -> str:
-    key = _base32_decode(secret)
-    counter = int((for_time or int(time.time())) / step)
-    counter_bytes = counter.to_bytes(8, "big")
-    digest = hmac.new(key, counter_bytes, hashlib.sha1).digest()
-    offset = digest[-1] & 0x0F
-    binary = (
-        ((digest[offset] & 0x7F) << 24)
-        | ((digest[offset + 1] & 0xFF) << 16)
-        | ((digest[offset + 2] & 0xFF) << 8)
-        | (digest[offset + 3] & 0xFF)
-    )
-    return str(binary % (10 ** digits)).zfill(digits)
-
-def verify_totp(secret: str, code: str, step: int = 30, digits: int = 6, skew: int = 2) -> bool:
-    code = str(code or "").strip()
-    if not re.fullmatch(rf"\d{{{digits}}}", code):
-        return False
-    now = int(time.time())
-    try:
-        for offset in range(-skew, skew + 1):
-            if hmac.compare_digest(code, _totp_code(secret, now + offset * step, step=step, digits=digits)):
-                return True
-    except Exception:
-        return False
-    return False
-
-def _hash_token(token: str) -> str:
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-def load_users() -> Dict[str, Any]:
-    if not USERS_PATH.exists():
-        raise RuntimeError("No existe users.json. Ejecuta el bootstrap de usuarios.")
-    try:
-        data = json.loads(USERS_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"users.json inválido: {e}")
-    if "users" not in data or not isinstance(data["users"], list):
-        raise RuntimeError("users.json inválido: falta lista de usuarios")
-    return data
-
-def save_users(data: Dict[str, Any]) -> None:
-    tmp = USERS_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(USERS_PATH)
-
-def find_user_by_token(token: str) -> Optional[Dict[str, Any]]:
-    token = token.strip()
-    if not token:
-        return None
-    token_hash = _hash_token(token)
-    data = load_users()
-    for user in data.get("users", []):
-        if hmac.compare_digest(str(user.get("token_hash", "")), token_hash):
-            return user
-    return None
-
-def require_admin(admin_token: str, admin_code: str) -> Dict[str, Any]:
-    user = find_user_by_token(admin_token)
-    if not user or user.get("role") != "admin":
-        raise PermissionError("Token de administrador inválido")
-    if not verify_totp(str(user.get("totp_secret", "")), admin_code):
-        raise PermissionError("MFA inválido")
-    return user
-
-def build_otpauth_uri(label: str, secret: str, issuer: str = "APK Signer") -> str:
-    label_enc = quote(label.strip().replace(" ", ""))
-    issuer_enc = quote(issuer.strip())
-    return f"otpauth://totp/{label_enc}?secret={secret}&issuer={issuer_enc}"
-
-def make_qr_data_url(otpauth: str) -> str:
-    img = qrcode.make(otpauth)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
-    return f"data:image/png;base64,{encoded}"
-
-def aapt_exists() -> bool:
-    return check_bin(AAPT_BIN)
-
-def java_ok() -> bool:
-    try:
-        rc, _, _ = run_cmd(["java", "-version"], timeout=10)
-        return rc == 0
-    except Exception:
-        return False
-
-# ----------------------------
-# APK inspect (aapt2)
-# ----------------------------
-_re_package = re.compile(r"package:\s+name='([^']+)'(?:\s+versionCode='([^']+)')?(?:\s+versionName='([^']+)')?")
-_re_sdk = re.compile(r"sdkVersion:'([^']+)'")
-_re_target = re.compile(r"targetSdkVersion:'([^']+)'")
-_re_label = re.compile(r"application-label:'([^']*)'")
-_re_perm = re.compile(r"uses-permission:\s+name='([^']+)'")
-
-def inspect_apk_with_aapt(apk_path: Path) -> Dict[str, Any]:
-    if not aapt_exists():
-        raise RuntimeError("aapt/aapt2 no encontrado")
-
-    # aapt2 suele aceptar: aapt2 dump badging <apk>
-    rc, out, err = run_cmd([AAPT_BIN, "dump", "badging", str(apk_path)], timeout=60)
-    if rc != 0:
-        # algunos aapt (no aapt2) usan: aapt dump badging <apk>
-        raise RuntimeError((err or out or f"aapt fallo rc={rc}").strip())
-
-    info: Dict[str, Any] = {}
-    m = _re_package.search(out)
-    if m:
-        info["packageName"] = m.group(1) or ""
-        info["versionCode"] = m.group(2) or ""
-        info["versionName"] = m.group(3) or ""
-
-    m = _re_label.search(out)
-    if m:
-        info["appLabel"] = m.group(1) or ""
-
-    m = _re_sdk.search(out)
-    if m:
-        info["minSdk"] = m.group(1) or ""
-
-    m = _re_target.search(out)
-    if m:
-        info["targetSdk"] = m.group(1) or ""
-
-    perms = _re_perm.findall(out) or []
-    perms = sorted(set(perms))
-    info["permissions"] = perms
-
-    # tags para UI (ordenados)
-    tags: List[Dict[str, str]] = []
-    if info.get("packageName"):
-        tags.append({"k": "Package", "v": info["packageName"]})
-    if info.get("versionName"):
-        tags.append({"k": "Versión", "v": info["versionName"]})
-    if info.get("versionCode"):
-        tags.append({"k": "VersionCode", "v": str(info["versionCode"])})
-    if info.get("minSdk"):
-        tags.append({"k": "minSdk", "v": str(info["minSdk"])})
-    if info.get("targetSdk"):
-        tags.append({"k": "targetSdk", "v": str(info["targetSdk"])})
-    info["tags"] = tags
-
-    return info
 
 # ----------------------------
 # Routes
@@ -338,7 +118,12 @@ def add_headers(resp):
     resp.headers["Referrer-Policy"] = "no-referrer"
     resp.headers["Cross-Origin-Resource-Policy"] = "same-origin"
     resp.headers["Permissions-Policy"] = "clipboard-read=(self), clipboard-write=(self)"
-    resp.headers["Cache-Control"] = "public, max-age=600"
+    # Solo los assets estáticos son cacheables. El resto (APK firmado, logs,
+    # listados de usuarios) no debe quedar en caché de navegador ni de proxy.
+    if request.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "public, max-age=600"
+    else:
+        resp.headers["Cache-Control"] = "no-store"
     resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     # CSP: sin inline JS. CSS self.
     resp.headers["Content-Security-Policy"] = (
@@ -375,6 +160,10 @@ def healthz():
         "aapt_configured": bool(AAPT_BIN),
         "aapt_exists": aapt_exists(),
         "apksigner_jar_exists": check_bin(APKSIGNER_JAR),
+        "zipalign_configured": bool(ZIPALIGN_BIN),
+        "zipalign_exists": check_bin(ZIPALIGN_BIN),
+        "zipalign_page_kb": (ZIPALIGN_PAGE_KB
+                             if ZIPALIGN_PAGE_KB and zipalign_supports_page_size() else 4),
         "keystore_exists": check_bin(KEYSTORE_PATH),
         "secrets_exists": SECRETS_PATH.exists(),
         "secrets_error": SECRETS_ERROR or "",
@@ -398,7 +187,90 @@ def healthz():
     except Exception:
         pass
 
-    return jsonify({"ok": True, "checks": checks, "now": utc_now_iso(), "version": "1.6.0"})
+    return jsonify({
+        "ok": True,
+        "checks": checks,
+        "auth": {
+            "sessionTtlMinutes": AUTH_TTL_MINUTES,
+            "maxFailures": MAX_AUTH_FAILURES,
+            "lockoutMinutes": AUTH_LOCKOUT_MINUTES,
+            "trustedProxies": TRUSTED_PROXIES,
+        },
+        "now": utc_now_iso(),
+        "version": "1.8.0",
+    })
+
+# ----------------------------
+# Errores: siempre JSON, nunca la página HTML de Werkzeug
+# ----------------------------
+@app.errorhandler(RequestEntityTooLarge)
+def _err_too_large(e):
+    mb = MAX_CONTENT_LENGTH / (1024 * 1024)
+    return jsonify({"ok": False, "error": f"El fichero supera el límite de {mb:.0f} MB"}), 413
+
+@app.errorhandler(HTTPException)
+def _err_http(e):
+    return jsonify({"ok": False, "error": e.description, "status": e.code}), e.code
+
+@app.errorhandler(subprocess.TimeoutExpired)
+def _err_timeout(e):
+    log_event("error", ok=False, path=request.path, error=f"timeout: {e}")
+    return jsonify({"ok": False, "error": "La operación superó el tiempo máximo"}), 504
+
+@app.errorhandler(Exception)
+def _err_unhandled(e):
+    log_event("error", ok=False, path=request.path, error=repr(e))
+    return jsonify({"ok": False, "error": "Error interno del servicio"}), 500
+
+# ----------------------------
+# Autenticación
+# ----------------------------
+@app.post("/api/auth/login")
+def auth_login():
+    payload = request.get_json(force=True, silent=True) or {}
+    user_token = str(payload.get("userToken", "")).strip()
+    mfa_code = str(payload.get("mfaCode", "")).strip()
+
+    if not user_token or not mfa_code:
+        return jsonify({"ok": False, "error": "Faltan token y código MFA"}), 400
+
+    try:
+        auth_token, expires_at, user = login(user_token, mfa_code)
+    except AuthLocked as e:
+        log_event("login", ok=False, error=str(e))
+        return jsonify({"ok": False, "error": str(e), "lockedSeconds": e.seconds}), 429
+    except PermissionError as e:
+        log_event("login", ok=False, error=str(e))
+        return jsonify({"ok": False, "error": str(e)}), 403
+
+    log_event("login", ok=True, userId=user.get("id", ""), userName=user.get("name", ""))
+    return jsonify({
+        "ok": True,
+        "authToken": auth_token,
+        "expiresAt": expires_at,
+        "user": {"id": user.get("id", ""), "name": user.get("name", ""), "role": user.get("role", "")},
+    }), 200
+
+@app.post("/api/auth/logout")
+def auth_logout():
+    payload = request.get_json(force=True, silent=True) or {}
+    logout(str(payload.get("authToken", "")).strip())
+    return jsonify({"ok": True}), 200
+
+def _session_from_request(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Acepta la sesión en la cabecera Authorization: Bearer <token> o en el
+    cuerpo JSON. Lanza PermissionError si no es válida.
+    """
+    header = request.headers.get("Authorization", "")
+    token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+    return require_session(token or str(payload.get("authToken", "")).strip())
+
+def _admin_from_request(payload: Dict[str, Any]) -> Dict[str, Any]:
+    user = _session_from_request(payload)
+    if user.get("role") != "admin":
+        raise PermissionError("Se requiere rol de administrador")
+    return user
 
 @app.post("/inspect")
 def inspect_ep():
@@ -407,9 +279,13 @@ def inspect_ep():
         return jsonify({"ok": False, "error": "Falta fichero (campo 'apk')"}), 400
 
     f = request.files["apk"]
-    original_name = (f.filename or "input.apk").strip()
-    if not original_name.lower().endswith(".apk"):
+    raw_name = (f.filename or "input.apk").strip()
+    if not raw_name.lower().endswith(".apk"):
         return jsonify({"ok": False, "error": "El fichero debe ser .apk"}), 400
+
+    # A partir de aquí solo se usa el nombre saneado: es el que acabará
+    # formando la ruta del APK firmado.
+    original_name = safe_apk_name(raw_name, fallback="input.apk")
 
     safe_mkdir(WORK_DIR / "sessions")
     sid = new_session_id()
@@ -477,30 +353,23 @@ def inspect_ep():
 
     return jsonify({"ok": True, **data}), 200
 
-def _signed_filename(original_name: str) -> str:
-    base = original_name
-    if base.lower().endswith(".apk"):
-        base = base[:-4]
-    return f"{base}_signed.apk"
-
 @app.post("/sign")
 def sign_ep():
     payload = request.get_json(force=True, silent=True) or {}
     sid = str(payload.get("sessionId", "")).strip()
-    user_token = str(payload.get("userToken", "")).strip()
-    mfa_code = str(payload.get("mfaCode", "")).strip()
 
     if not sid:
         return jsonify({"ok": False, "error": "Falta sessionId"}), 400
+    if not valid_sid(sid):
+        return jsonify({"ok": False, "error": "sessionId inválido"}), 400
     if SECRETS_ERROR or SECRETS_MISSING:
         return jsonify({"ok": False, "error": "Falta configurar secrets.json"}), 503
-    if not user_token or not mfa_code:
-        return jsonify({"ok": False, "error": "Faltan credenciales MFA"}), 400
 
-    user = find_user_by_token(user_token)
-    if not user or not verify_totp(str(user.get("totp_secret", "")), mfa_code):
-        log_event("sign", ok=False, sessionId=sid, error="MFA incorrecto")
-        return jsonify({"ok": False, "error": "MFA incorrecto"}), 403
+    try:
+        user = _session_from_request(payload)
+    except PermissionError as e:
+        log_event("sign", ok=False, sessionId=sid, error=str(e))
+        return jsonify({"ok": False, "error": str(e)}), 403
 
     try:
         meta = load_session_meta(sid)
@@ -527,21 +396,54 @@ def sign_ep():
         )
         return jsonify({"ok": False, "error": err}), 500
 
+    # zipalign ANTES de firmar: apksigner preserva el alineado, pero alinear
+    # después invalidaría la firma. Sin alinear, los recursos sin comprimir no
+    # se pueden mapear en memoria en el dispositivo.
+    sign_input = in_path
+    align_warning = ""
+    align_page_kb = 0
+    if check_bin(ZIPALIGN_BIN):
+        aligned_path = session_dir(sid) / "aligned.apk"
+        args_align, page_kb = zipalign_args(in_path, aligned_path)
+        rc_a, out_a, err_a = run_cmd(args_align, timeout=120)
+        if rc_a == 0 and aligned_path.exists():
+            sign_input = aligned_path
+            align_page_kb = page_kb
+            if ZIPALIGN_PAGE_KB and page_kb < ZIPALIGN_PAGE_KB:
+                # zipalign de build-tools 34 no admite -P: solo llega a 4 KB.
+                align_warning = (
+                    f"zipalign solo admite alineado a 4 KB; se pidieron "
+                    f"{ZIPALIGN_PAGE_KB} KB. Actualiza a build-tools 35 o superior "
+                    f"si firmas para Android 15+."
+                )
+        else:
+            align_warning = (err_a or out_a or f"zipalign falló (rc={rc_a})").strip()
+            log_event("zipalign", ok=False, sessionId=sid, error=align_warning,
+                      userId=user.get("id", ""), userName=user.get("name", ""))
+    else:
+        align_warning = "zipalign no configurado: el APK se firma sin alinear"
+
+    # Las contraseñas se pasan por entorno (env:VAR), no por argv: cualquier
+    # usuario local vería `pass:<contraseña>` en `ps` durante la firma.
     args = [
         "java", "-jar", APKSIGNER_JAR,
         "sign",
         "--v1-signing-enabled", "true",
         "--v2-signing-enabled", "true",
         "--ks", KEYSTORE_PATH,
-        "--ks-pass", f"pass:{KS_PASS}",
+        "--ks-pass", "env:APK_SIGNER_KS_PASS",
         "--ks-key-alias", KEY_ALIAS,
-        "--key-pass", f"pass:{KEY_PASS}",
-        "--in", str(in_path),
+        "--key-pass", "env:APK_SIGNER_KEY_PASS",
+        "--in", str(sign_input),
         "--out", str(out_path),
     ]
+    sign_env = {
+        "APK_SIGNER_KS_PASS": KS_PASS,
+        "APK_SIGNER_KEY_PASS": KEY_PASS,
+    }
 
     t0 = time.time()
-    rc, out, err = run_cmd(args, timeout=120)
+    rc, out, err = run_cmd(args, timeout=120, env=sign_env)
     dt_ms = int((time.time() - t0) * 1000)
 
     if rc != 0:
@@ -567,6 +469,8 @@ def sign_ep():
         "id": user.get("id", ""),
         "name": user.get("name", ""),
     }
+    meta["aligned"] = sign_input != in_path
+    meta["alignPageKb"] = align_page_kb
     save_session_meta(sid, meta)
 
     log_event(
@@ -585,6 +489,9 @@ def sign_ep():
         "message": "Firma correcta",
         "sessionId": sid,
         "signedName": signed_name,
+        "aligned": meta["aligned"],
+        "alignPageKb": align_page_kb,
+        "warning": align_warning,
         "stdout": out,
         "stderr": err
     }), 200
@@ -595,6 +502,8 @@ def verify_ep():
     sid = str(payload.get("sessionId", "")).strip()
     if not sid:
         return jsonify({"ok": False, "error": "Falta sessionId"}), 400
+    if not valid_sid(sid):
+        return jsonify({"ok": False, "error": "sessionId inválido"}), 400
 
     try:
         meta = load_session_meta(sid)
@@ -652,30 +561,60 @@ def verify_ep():
 
     return jsonify({"ok": True, "message": "Verificación correcta", "stdout": out, "stderr": err}), 200
 
-@app.get("/download/<sid>")
-def download_ep(sid: str):
-    sid = (sid or "").strip()
+@app.post("/download")
+def download_ep():
+    """
+    Descarga del APK firmado. Exige token + MFA y que quien descarga sea quien
+    firmó (o un admin): conocer el sessionId ya no basta.
+    """
+    payload = request.get_json(force=True, silent=True) or {}
+    sid = str(payload.get("sessionId", "")).strip()
+
+    if not sid:
+        return jsonify({"ok": False, "error": "Falta sessionId"}), 400
+    if not valid_sid(sid):
+        return jsonify({"ok": False, "error": "sessionId inválido"}), 400
+
+    try:
+        user = _session_from_request(payload)
+    except PermissionError as e:
+        log_event("download", ok=False, sessionId=sid, error=str(e))
+        return jsonify({"ok": False, "error": str(e)}), 403
+
     try:
         meta = load_session_meta(sid)
-    except Exception:
-        abort(404)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 404
 
     # según lo acordado: habilitar tras firma correcta (no hace falta verify)
     if not meta.get("signedOk"):
-        abort(403)
+        return jsonify({"ok": False, "error": "No hay APK firmado aún"}), 403
+
+    signed_by = meta.get("signedBy") or {}
+    is_admin = user.get("role") == "admin"
+    if not is_admin and str(signed_by.get("id", "")) != str(user.get("id", "")):
+        log_event(
+            "download",
+            ok=False,
+            sessionId=sid,
+            filename=meta.get("signedName", ""),
+            error="Descarga de sesión ajena",
+            userId=user.get("id", ""),
+            userName=user.get("name", ""),
+        )
+        return jsonify({"ok": False, "error": "La sesión pertenece a otro usuario"}), 403
 
     signed_path = Path(meta.get("signedPath", ""))
     if not signed_path.exists():
-        abort(404)
+        return jsonify({"ok": False, "error": "APK firmado no existe"}), 404
 
-    signed_by = meta.get("signedBy") or {}
     log_event(
         "download",
         ok=True,
         sessionId=sid,
         filename=meta.get("signedName", ""),
-        userId=signed_by.get("id", ""),
-        userName=signed_by.get("name", ""),
+        userId=user.get("id", ""),
+        userName=user.get("name", ""),
     )
     return send_file(
         signed_path,
@@ -689,22 +628,20 @@ def download_ep(sid: str):
 @app.post("/api/admin/verify")
 def admin_verify():
     payload = request.get_json(force=True, silent=True) or {}
-    admin_token = str(payload.get("adminToken", "")).strip()
-    admin_code = str(payload.get("adminCode", "")).strip()
+
     try:
-        admin = require_admin(admin_token, admin_code)
-    except Exception as e:
+        admin = _admin_from_request(payload)
+    except PermissionError as e:
         return jsonify({"ok": False, "error": str(e)}), 403
     return jsonify({"ok": True, "admin": {"id": admin.get("id", ""), "name": admin.get("name", "")}}), 200
 
 @app.post("/api/admin/users/list")
 def admin_users_list():
     payload = request.get_json(force=True, silent=True) or {}
-    admin_token = str(payload.get("adminToken", "")).strip()
-    admin_code = str(payload.get("adminCode", "")).strip()
+
     try:
-        require_admin(admin_token, admin_code)
-    except Exception as e:
+        _admin_from_request(payload)
+    except PermissionError as e:
         return jsonify({"ok": False, "error": str(e)}), 403
 
     try:
@@ -724,15 +661,14 @@ def admin_users_list():
 @app.post("/api/admin/users/create")
 def admin_users_create():
     payload = request.get_json(force=True, silent=True) or {}
-    admin_token = str(payload.get("adminToken", "")).strip()
-    admin_code = str(payload.get("adminCode", "")).strip()
+
     name = str(payload.get("name", "")).strip()
     if not name:
         return jsonify({"ok": False, "error": "Nombre requerido"}), 400
 
     try:
-        require_admin(admin_token, admin_code)
-    except Exception as e:
+        _admin_from_request(payload)
+    except PermissionError as e:
         return jsonify({"ok": False, "error": str(e)}), 403
 
     try:
@@ -776,15 +712,14 @@ def admin_users_create():
 @app.post("/api/admin/users/delete")
 def admin_users_delete():
     payload = request.get_json(force=True, silent=True) or {}
-    admin_token = str(payload.get("adminToken", "")).strip()
-    admin_code = str(payload.get("adminCode", "")).strip()
+
     user_id = str(payload.get("userId", "")).strip()
     if not user_id:
         return jsonify({"ok": False, "error": "userId requerido"}), 400
 
     try:
-        require_admin(admin_token, admin_code)
-    except Exception as e:
+        _admin_from_request(payload)
+    except PermissionError as e:
         return jsonify({"ok": False, "error": str(e)}), 403
 
     try:
@@ -805,36 +740,74 @@ def admin_users_delete():
     save_users(data)
     return jsonify({"ok": True}), 200
 
-@app.get("/logs/data")
-def logs_data():
-    # Devuelve las últimas N líneas parseadas, con integridad “user-friendly”
-    limit = request.args.get("limit", "").strip()
+@app.post("/logs/verify")
+def logs_verify():
+    """
+    Verificación completa de la traza: recorre el fichero entero comprobando
+    MAC y encadenado. Solo admin: revela el volumen total de actividad.
+    """
+    payload = request.get_json(force=True, silent=True) or {}
     try:
-        n = int(limit) if limit else 200
+        _admin_from_request(payload)
+    except PermissionError as e:
+        return jsonify({"ok": False, "error": str(e)}), 403
+
+    try:
+        summary = verify_log_chain()
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"No se pudo verificar la traza: {e}"}), 500
+    return jsonify({"ok": True, "summary": summary}), 200
+
+@app.post("/logs/data")
+def logs_data():
+    """
+    Últimos N eventos con su estado de integridad. Requiere token + MFA:
+    la traza contiene nombres de artefacto, usuarios, IPs y sessionId.
+    Un admin ve todo; un usuario normal solo sus propios eventos.
+    """
+    payload = request.get_json(force=True, silent=True) or {}
+
+    try:
+        user = _session_from_request(payload)
+    except PermissionError as e:
+        return jsonify({"ok": False, "error": str(e)}), 403
+
+    try:
+        n = int(payload.get("limit") or 200)
     except Exception:
         n = 200
     n = max(1, min(n, LOG_MAX_LINES))
+
+    is_admin = user.get("role") == "admin"
+    own_id = str(user.get("id", ""))
 
     events: List[Dict[str, Any]] = []
     if LOG_FILE.exists():
         try:
             lines = LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
-            for line in lines[-n:]:
+            # Se recorre desde el final para quedarse con los N últimos eventos
+            # visibles, no con los N últimos del fichero antes de filtrar.
+            for line in reversed(lines):
+                if len(events) >= n:
+                    break
                 line = line.strip()
                 if not line:
                     continue
                 try:
                     evt = json.loads(line)
-                    integrity, okv = verify_event_mac(evt)
-                    evt["_integrity"] = integrity
-                    evt["_integrity_ok"] = okv
-                    events.append(evt)
                 except Exception:
                     continue
+                if not is_admin and str(evt.get("userId", "")) != own_id:
+                    continue
+                integrity, okv = verify_event_mac(evt)
+                evt["_integrity"] = integrity
+                evt["_integrity_ok"] = okv
+                events.append(evt)
+            events.reverse()
         except Exception:
             pass
 
-    return jsonify({"ok": True, "events": events, "count": len(events)}), 200
+    return jsonify({"ok": True, "events": events, "count": len(events), "scope": "all" if is_admin else "own"}), 200
 
 # ----------------------------
 # Main
@@ -845,4 +818,8 @@ if __name__ == "__main__":
     safe_mkdir(LOG_DIR)
     if not LOG_FILE.exists():
         LOG_FILE.touch()
-    app.run(host="0.0.0.0", port=8001, debug=False)
+    # Modo desarrollo. En produccion arranca gunicorn desde la unit de systemd.
+    # Se escucha solo en loopback por defecto; para probar desde otra maquina,
+    # APK_SIGNER_DEV_HOST=0.0.0.0 python app.py
+    host = os.environ.get("APK_SIGNER_DEV_HOST", "127.0.0.1")
+    app.run(host=host, port=8001, debug=False)

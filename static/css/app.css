@@ -68,6 +68,7 @@ body{
 .topbar-actions{
   display:flex;
   gap:10px;
+  align-items:center;
 }
 
 .page{
@@ -299,6 +300,17 @@ body{
 }
 
 .hidden{ display:none; }
+
+/* Indicador de sesion activa en la barra superior */
+.session-info{
+  font-size:12px;
+  color:var(--muted);
+  padding:6px 10px;
+  border:1px solid var(--line);
+  border-radius:999px;
+  white-space:nowrap;
+}
+.session-info.hidden{ display:none; }
 
 .apkinfo.hidden{ display:none; }
 

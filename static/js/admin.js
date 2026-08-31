@@ -27,6 +27,8 @@
   const systemNotice = el("systemNotice");
 
   let verified = false;
+  // Sesión corta emitida por /api/auth/login. Solo en memoria.
+  let auth = { token: "", expiresAt: 0 };
 
   async function apiFetch(url, opts = {}, timeoutMs = 20000) {
     const controller = new AbortController();
@@ -52,11 +54,35 @@
     }
   }
 
-  function getAdminPayload() {
-    return {
-      adminToken: (adminToken.value || "").trim(),
-      adminCode: (adminMfa.value || "").trim(),
-    };
+  function sessionValid() {
+    return Boolean(auth.token) && Date.now() < auth.expiresAt - 5000;
+  }
+
+  function clearSession() {
+    auth = { token: "", expiresAt: 0 };
+  }
+
+  // Todas las llamadas de administración van con la sesión en la cabecera.
+  // Un 403 significa sesión caducada o rol insuficiente: se vuelve a bloquear
+  // la pantalla en lugar de dejarla en un estado inconsistente.
+  async function adminFetch(url, body = {}, timeoutMs = 20000) {
+    if (!sessionValid()) {
+      setUnlocked(false);
+      throw new Error("Sesión caducada. Vuelve a introducir token y MFA.");
+    }
+    try {
+      return await apiFetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${auth.token}` },
+        body: JSON.stringify(body),
+      }, timeoutMs);
+    } catch (e) {
+      if (String(e.message || "").includes("Sesión") || String(e.message || "").includes("administrador")) {
+        clearSession();
+        setUnlocked(false);
+      }
+      throw e;
+    }
   }
 
   function setStatus(msg, ok = true) {
@@ -93,21 +119,31 @@
   }
 
   async function verifyAdmin() {
-    const payload = getAdminPayload();
-    if (!payload.adminToken || !payload.adminCode) {
+    const userToken = (adminToken.value || "").trim();
+    const mfaCode = (adminMfa.value || "").trim();
+    if (!userToken || !mfaCode) {
       setStatus("Token y MFA requeridos.", false);
       return;
     }
     try {
-      await apiFetch("/api/admin/verify", {
+      const j = await apiFetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ userToken, mfaCode }),
       });
-      setStatus("Acceso correcto. Gestión desbloqueada.");
+      auth = { token: j.authToken, expiresAt: new Date(j.expiresAt).getTime() };
+      // El código ya está canjeado: no vale reutilizarlo.
+      adminMfa.value = "";
+
+      // Confirma el rol contra el backend, no solo lo que diga el login.
+      await adminFetch("/api/admin/verify");
+
+      const hh = new Date(auth.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      setStatus(`Acceso correcto. Sesión activa hasta las ${hh}.`);
       setUnlocked(true);
       await loadUsers();
     } catch (e) {
+      clearSession();
       setStatus(`Acceso denegado: ${e.message}`, false);
       setUnlocked(false);
     }
@@ -117,12 +153,7 @@
     if (!verified) return;
     usersTbody.innerHTML = "";
     try {
-      const payload = getAdminPayload();
-      const j = await apiFetch("/api/admin/users/list", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const j = await adminFetch("/api/admin/users/list");
 
       const users = Array.isArray(j.users) ? j.users : [];
       for (const user of users) {
@@ -150,12 +181,7 @@
       return;
     }
     try {
-      const payload = { ...getAdminPayload(), name };
-      const j = await apiFetch("/api/admin/users/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const j = await adminFetch("/api/admin/users/create", { name });
 
       userResult.classList.remove("hidden");
       resultToken.textContent = j.token || "";
@@ -177,12 +203,7 @@
     if (!userId) return;
     if (!confirm("¿Borrar este usuario?")) return;
     try {
-      const payload = { ...getAdminPayload(), userId };
-      await apiFetch("/api/admin/users/delete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      await adminFetch("/api/admin/users/delete", { userId });
       await loadUsers();
     } catch (err) {
       setStatus(`No se pudo borrar: ${err.message}`, false);

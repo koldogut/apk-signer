@@ -1,0 +1,15 @@
+#!/bin/sh
+# aapt2 de mentira: devuelve un `dump badging` realista.
+LOG="${FAKE_TOOLS_LOG:-/dev/null}"
+echo "aapt2 $*" >> "$LOG"
+[ -n "$FAKE_AAPT_FAIL" ] && { echo "ERROR: dump failed" >&2; exit 1; }
+cat <<'OUT'
+package: name='com.example.pos' versionCode='42' versionName='3.1.4' platformBuildVersionName='14'
+sdkVersion:'24'
+targetSdkVersion:'34'
+uses-permission: name='android.permission.INTERNET'
+uses-permission: name='android.permission.NFC'
+uses-permission: name='android.permission.ACCESS_NETWORK_STATE'
+application-label:'Punto de Venta'
+OUT
+exit 0
