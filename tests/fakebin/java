@@ -1,0 +1,46 @@
+#!/bin/sh
+# java de mentira para los tests: emula lo justo de `apksigner.jar`.
+# Escribe en el log de llamadas para poder afirmar sobre argv y entorno.
+LOG="${FAKE_TOOLS_LOG:-/dev/null}"
+echo "java $*" >> "$LOG"
+
+if [ "$1" = "-version" ]; then
+  echo "openjdk version \"17.0.0\" (fake)" >&2
+  exit 0
+fi
+
+# Formato: java -jar <jar> <sign|verify> ...
+shift 2
+CMD="$1"
+
+if [ "$CMD" = "sign" ]; then
+  # Las contrasenas deben llegar por ENTORNO, nunca en argv.
+  if [ -z "$APK_SIGNER_KS_PASS" ] || [ -z "$APK_SIGNER_KEY_PASS" ]; then
+    echo "fake-apksigner: faltan APK_SIGNER_KS_PASS/APK_SIGNER_KEY_PASS en el entorno" >&2
+    exit 2
+  fi
+  echo "env APK_SIGNER_KS_PASS=$APK_SIGNER_KS_PASS" >> "$LOG"
+  IN=""; OUT=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --in)  IN="$2";  shift 2 ;;
+      --out) OUT="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  [ -n "$IN" ] && [ -n "$OUT" ] || exit 3
+  cp "$IN" "$OUT" || exit 4
+  exit 0
+fi
+
+if [ "$CMD" = "verify" ]; then
+  if [ -n "$FAKE_VERIFY_FAIL" ]; then
+    echo "DOES NOT VERIFY" >&2
+    exit 1
+  fi
+  echo "Verifies"
+  echo "Signer #1 certificate DN: CN=Test, O=APK Signer"
+  exit 0
+fi
+
+exit 1

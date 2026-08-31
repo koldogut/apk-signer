@@ -7,6 +7,23 @@ y el proyecto sigue [Semantic Versioning](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-08-31
+### Added
+- Suite de tests con pytest (95 casos): autenticación, flujo completo de firma, cabeceras y errores HTTP, traza de auditoría y mantenimiento. Las herramientas externas se sustituyen por scripts en `tests/fakebin/` antepuestos al `PATH`, de modo que los tests recorren el mismo código de `subprocess` que producción sin necesitar el Android SDK.
+- Integración continua en GitHub Actions: `pytest` en Python 3.9 y 3.11, `ruff`, `bandit`, `pip-audit`, `bash -n setup.sh` y `nginx -t` sobre la configuración real. Dependabot para pip, actions y la imagen base.
+- Traza de auditoría encadenada por hash: cada evento lleva `seq` correlativo y `prev` con el hash del anterior. Un MAC por línea no detecta el borrado de eventos, porque las líneas supervivientes siguen siendo válidas; el encadenado sí.
+- `POST /logs/verify` (solo admin) recorre la traza completa comprobando MAC y encadenado, y señala la primera rotura. Botón "Verificar cadena" en el modal de Logs.
+- `SYSLOG_ADDRESS` opcional para enviar la traza a un syslog o SIEM remoto, única defensa real frente a quien controle la máquina y pueda borrar el fichero.
+- La rotación de `cleanup.py` deja un evento `log-rotated` que enlaza con el hash del fichero rotado, de forma que la cadena no se parte al rotar.
+
+### Changed
+- `app.py` (1.427 líneas) se separa en `config.py`, `audit.py`, `auth.py`, `signing.py` y `app.py`, con dependencias en una sola dirección. `app:app` sigue siendo el punto de entrada, así que ni la unit de systemd ni el `Dockerfile` cambian. Los 95 tests pasan sin modificación, que es lo que acredita que el corte preserva el comportamiento.
+- `cleanup.py` deja de tener `/opt/apk-signer` fijo: deriva la ruta de su propia ubicación y respeta `CREDENTIALS_DIRECTORY` igual que la aplicación.
+- El servidor de desarrollo escucha en `127.0.0.1` en lugar de `0.0.0.0`; se abre con `APK_SIGNER_DEV_HOST` si hace falta. En producción arranca gunicorn desde systemd.
+
+### Fixed
+- La verificación de la cadena trataba el evento ancla de rotación como una rotura, porque su `prev` y su `seq` no empiezan de cero. Ahora se reconoce como continuación y se informa del fichero de origen en `continuesFrom`.
+
 ## [1.7.0] - 2026-08-31
 ### Security
 - Autenticación por sesión corta: token + MFA se canjean una sola vez en `POST /api/auth/login` por un `authToken` con caducidad (15 min por defecto) que autoriza firmar, verificar, descargar y consultar la traza. Nuevo `POST /api/auth/logout`.

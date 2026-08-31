@@ -162,3 +162,44 @@ Si el fallo aparece al firmar y no al arrancar, casi siempre es la JVM: comprueb
 **Causa:** `TRUSTED_PROXIES` está a 0, o nginx no envía `X-Forwarded-For`.
 
 **Solución:** con nginx delante, `TRUSTED_PROXIES` debe ser 1. Si añades otro proxy o balanceador por delante, súbelo al número real de saltos: un valor mayor del real permitiría falsificar la IP con una cabecera.
+
+## 22) "Verificar cadena" informa de roturas
+
+**Causa:** la traza no cuadra. Distingue entre:
+
+* **eventos modificados** (`macBad`): alguien cambió el contenido de una línea;
+* **roturas de cadena** (`chainBad`): se borraron o reordenaron eventos;
+* **líneas ilegibles** (`unreadable`): JSON corrupto, normalmente por un disco lleno o un corte durante la escritura;
+* **"sin cadena"**: eventos anteriores a la versión 1.8.0, que no llevaban `prev`. Es esperado en trazas antiguas y no indica manipulación.
+
+**Solución:** `firstProblemSeq` señala el primer evento afectado; a partir de ahí la traza ya no prueba nada. Conserva el fichero como evidencia antes de tocarlo:
+
+```bash
+sudo cp /opt/apk-signer/logs/app.jsonl /var/tmp/app.jsonl.evidencia
+sudo ls -l /opt/apk-signer/logs/
+```
+
+Si la cadena se rompe justo en el primer evento y este es `log-rotated`, no es una rotura: es el enlace normal con el fichero rotado, y el resumen lo indica en `continuesFrom`.
+
+## 23) El resumen dice `hasKey: false`
+
+**Causa:** no hay `LOG_HMAC_KEY` en `secrets.json`, así que los eventos no llevan MAC.
+
+**Solución:** genera una clave y reinicia el servicio. Los eventos ya escritos no se pueden sellar retroactivamente:
+
+```bash
+python3 -c "import os;print(os.urandom(32).hex())"
+```
+
+## 24) Los tests fallan con "No existe secrets.json"
+
+**Causa:** se está ejecutando `pytest` sin las dependencias de desarrollo, o desde un directorio distinto de la raíz del repo.
+
+**Solución:**
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+Los tests montan su propia configuración en un directorio temporal vía `CREDENTIALS_DIRECTORY`: no usan ni modifican el `secrets.json` de la máquina.

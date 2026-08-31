@@ -49,6 +49,8 @@
   const btnOpenLogs = el("btnOpenLogs");
   const modalLogs = el("modalLogs");
   const btnRefreshLogs = el("btnRefreshLogs");
+  const btnVerifyChain = el("btnVerifyChain");
+  const chainResult = el("chainResult");
   const logsTbody = el("logsTbody");
   const systemNotice = el("systemNotice");
 
@@ -712,6 +714,38 @@
   });
 
   btnLogout.addEventListener("click", doLogout);
+
+  // Verificacion completa de la traza: recorre el fichero comprobando MAC y
+  // encadenado. Solo admin.
+  async function verifyChain() {
+    if (!chainResult) return;
+    chainResult.classList.remove("hidden");
+    chainResult.textContent = "Verificando la traza completa...";
+    try {
+      const j = await authFetch("/logs/verify", {}, 60000);
+      if (!j) {
+        chainResult.textContent = "Introduce token y código MFA para verificar la traza.";
+        return;
+      }
+      const s = j.summary || {};
+      if (s.ok) {
+        const desde = s.continuesFrom ? ` Continúa la cadena de ${s.continuesFrom}.` : "";
+        chainResult.textContent =
+          `Traza íntegra: ${s.events} eventos, ${s.macOk} con MAC verificado, sin roturas de cadena.${desde}`;
+      } else {
+        const partes = [];
+        if (s.macBad?.length) partes.push(`${s.macBad.length} evento(s) modificados`);
+        if (s.chainBad?.length) partes.push(`${s.chainBad.length} rotura(s) de cadena`);
+        if (s.unreadable) partes.push(`${s.unreadable} línea(s) ilegibles`);
+        if (!s.hasKey) partes.push("no hay LOG_HMAC_KEY configurada");
+        chainResult.textContent =
+          `ATENCIÓN: ${partes.join(", ")}. Primer problema en el evento #${s.firstProblemSeq ?? "?"}.`;
+      }
+    } catch (e) {
+      chainResult.textContent = `No se pudo verificar: ${e.message}`;
+    }
+  }
+  btnVerifyChain.addEventListener("click", verifyChain);
 
   btnCopyOutput.addEventListener("click", async () => {
     const ok = await copyText(output.textContent || "");

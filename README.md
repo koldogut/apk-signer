@@ -88,6 +88,7 @@ El token de usuario y el código MFA **se canjean una sola vez** por una sesión
 | `/verify` | POST | — | Solo sobre una sesión ya firmada |
 | `/download` | POST | sesión | Solo quien firmó la sesión, o un admin |
 | `/logs/data` | POST | sesión | Un admin ve toda la traza; un usuario, solo sus eventos |
+| `/logs/verify` | POST | sesión con rol `admin` | Verifica MAC y encadenado de la traza completa |
 | `/api/admin/*` | POST | sesión con rol `admin` | |
 
 Ejemplo desde consola:
@@ -118,6 +119,27 @@ Antes de firmar, el servicio ejecuta `zipalign -p -f 4` sobre el APK subido. Es 
 
 Si `zipalign` no está configurado o falla, la firma continúa pero la respuesta incluye `"aligned": false` y un `warning`, y queda registrado en la traza. Comprueba `zipalign_exists` en `/healthz`.
 
+## Traza de auditoría
+
+Cada evento se registra en `logs/app.jsonl` con:
+
+* un **MAC** (HMAC-SHA256 con `LOG_HMAC_KEY`), que detecta la modificación de esa línea;
+* un **encadenado**: `seq` correlativo y `prev` con el hash del evento anterior.
+
+La diferencia importa. Un MAC por línea no ve que se hayan **borrado** eventos: las líneas que quedan siguen siendo válidas una por una. El encadenado sí, porque el `prev` del siguiente deja de cuadrar.
+
+Un administrador puede recorrer la traza entera desde el botón "Verificar cadena" del modal de Logs, o por API:
+
+```bash
+curl -sk https://localhost/logs/verify \
+  -H "Authorization: Bearer $AUTH" \
+  -H 'Content-Type: application/json' -d '{}' | jq .summary
+```
+
+La rotación (`cleanup.py`, cada hora si el fichero pasa de 10 MB) deja en el fichero nuevo un evento `log-rotated` que enlaza con el hash del último evento del fichero rotado, para que la cadena no se parta al rotar.
+
+> Límite: la cadena detecta manipulación, pero no la impide, y quien controle la máquina puede borrar la traza entera y el fichero rotado. Para tamper-evidence real, configura `SYSLOG_ADDRESS` (`"host:514"` o `"/dev/log"`) y envía la traza a un syslog o SIEM fuera de la máquina.
+
 ## Aislamiento del servicio
 
 La unit de systemd corre con `ProtectSystem=strict`, `PrivateTmp`, `NoNewPrivileges` y `SystemCallFilter=@system-service`, con `/opt/apk-signer` como único árbol escribible.
@@ -130,6 +152,42 @@ Dos avisos si tocas ese fichero:
 Para sacar las contraseñas del árbol de la aplicación, deja el fichero en `/etc/apk-signer/secrets.json` (`root:root`, `0600`) y descomenta la línea `LoadCredential=` de la unit. La aplicación lo detecta por `$CREDENTIALS_DIRECTORY` sin ningún otro cambio.
 
 Para más detalles y solución de errores, revisa `docs/INSTALACION.md` y `docs/RESUMEN_ERRORES.md`.
+
+## Desarrollo
+
+El código está separado por responsabilidad, con las dependencias en una sola dirección (`config` → `audit` → `auth` → `signing` → `app`):
+
+| Módulo | Contenido |
+|---|---|
+| `config.py` | Carga de secretos, rutas y constantes |
+| `audit.py` | Traza encadenada, MAC y verificación |
+| `auth.py` | TOTP, anti-replay, sesiones y bloqueo |
+| `signing.py` | Inspección con `aapt2`, alineado y firma |
+| `app.py` | Aplicación Flask y rutas |
+
+`app:app` sigue siendo el punto de entrada, así que la unit de systemd y el `Dockerfile` no cambian.
+
+### Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+Las herramientas externas (`java`/`apksigner`, `aapt2`, `zipalign`) se sustituyen por scripts en `tests/fakebin/` que se anteponen al `PATH`. Los tests recorren así el mismo código de `subprocess` que producción —incluido el paso de contraseñas por entorno— sin necesitar el Android SDK. La configuración de prueba se inyecta con `CREDENTIALS_DIRECTORY`, el mismo mecanismo que usa systemd con `LoadCredential=`.
+
+> No hay cobertura de integración contra Build Tools reales: haría falta el SDK de Android, que no está disponible en CI. Lo que se valida es el contrato con esas herramientas (orden de invocación, argumentos y entorno), no su comportamiento interno.
+
+### Comprobaciones automáticas
+
+`.github/workflows/ci.yml` ejecuta en cada push y PR:
+
+* `pytest` en Python 3.9 y 3.11 (mínimo declarado y el del `Dockerfile`);
+* `ruff` sobre todo el repo y `bash -n setup.sh`;
+* `bandit` y `pip-audit` sobre las dependencias de producción;
+* `nginx -t` sobre `nginx/apk-signer.conf`, con un certificado de usar y tirar.
+
+Dependabot vigila `pip`, las GitHub Actions y la imagen base del `Dockerfile`.
 
 ## Capturas de la aplicación
 

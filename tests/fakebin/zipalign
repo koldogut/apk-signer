@@ -1,0 +1,10 @@
+#!/bin/sh
+# zipalign de mentira: valida los flags y copia entrada -> salida.
+LOG="${FAKE_TOOLS_LOG:-/dev/null}"
+echo "zipalign $*" >> "$LOG"
+[ -n "$FAKE_ZIPALIGN_FAIL" ] && { echo "zipalign: unable to open file" >&2; exit 1; }
+# Se espera: -p -f 4 <in> <out>
+IN=""; OUT=""
+for a in "$@"; do IN="$OUT"; OUT="$a"; done
+cp "$IN" "$OUT" || exit 2
+exit 0

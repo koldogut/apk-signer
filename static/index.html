@@ -167,10 +167,12 @@
         <div class="modal-title">Logs</div>
         <div class="modal-actions">
           <button id="btnRefreshLogs" class="btn btn-ghost" type="button">Actualizar</button>
+          <button id="btnVerifyChain" class="btn btn-ghost" type="button">Verificar cadena</button>
           <button class="btn btn-ghost" type="button" data-close="1">Cerrar</button>
         </div>
       </div>
       <div class="modal-body">
+        <div id="chainResult" class="notice hidden" role="status"></div>
         <div class="logs-table-wrap">
           <table class="logs-table" id="logsTable">
             <thead>

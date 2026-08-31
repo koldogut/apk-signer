@@ -12,3 +12,8 @@ secrets.json
 users.json
 android-sdk
 png
+tests
+.github
+.pytest_cache
+.ruff_cache
+requirements-dev.txt
