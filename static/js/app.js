@@ -730,8 +730,13 @@
       const s = j.summary || {};
       if (s.ok) {
         const desde = s.continuesFrom ? ` Continúa la cadena de ${s.continuesFrom}.` : "";
+        // Los eventos anteriores a configurar LOG_HMAC_KEY no llevan MAC y no
+        // se pueden sellar a posteriori: conviene decirlo, no solo dar el conteo.
+        const sinSellar = s.macMissing
+          ? ` ${s.macMissing} evento(s) sin MAC, anteriores a la clave actual: esos no están protegidos.`
+          : "";
         chainResult.textContent =
-          `Traza íntegra: ${s.events} eventos, ${s.macOk} con MAC verificado, sin roturas de cadena.${desde}`;
+          `Traza íntegra: ${s.events} eventos, ${s.macOk} con MAC verificado, sin roturas de cadena.${desde}${sinSellar}`;
       } else if (!s.hasKey) {
         chainResult.textContent =
           `SIN SELLAR: ${s.warning || "no hay LOG_HMAC_KEY configurada"}. ` +
