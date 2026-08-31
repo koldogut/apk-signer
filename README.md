@@ -77,18 +77,57 @@ Si ves errores 413 al subir APKs, revisa el límite `client_max_body_size` en la
 
 ## Control de acceso
 
-Todos los endpoints que exponen artefactos o trazas exigen token de usuario + código MFA en el cuerpo de la petición:
+El token de usuario y el código MFA **se canjean una sola vez** por una sesión corta (15 min por defecto). Esa sesión es la que autoriza el resto de operaciones, y viaja en la cabecera `Authorization: Bearer <authToken>` o en el campo `authToken` del cuerpo.
 
 | Endpoint | Método | Requiere | Notas |
 |---|---|---|---|
+| `/api/auth/login` | POST | token + MFA | Devuelve `authToken` y `expiresAt` |
+| `/api/auth/logout` | POST | `authToken` | Invalida la sesión |
 | `/inspect` | POST | — | Sube e inspecciona el APK |
-| `/sign` | POST | token + MFA | |
+| `/sign` | POST | sesión | Alinea con `zipalign` y firma |
 | `/verify` | POST | — | Solo sobre una sesión ya firmada |
-| `/download` | POST | token + MFA | Solo quien firmó la sesión, o un admin |
-| `/logs/data` | POST | token + MFA | Un admin ve toda la traza; un usuario, solo sus eventos |
-| `/api/admin/*` | POST | token + MFA de admin | |
+| `/download` | POST | sesión | Solo quien firmó la sesión, o un admin |
+| `/logs/data` | POST | sesión | Un admin ve toda la traza; un usuario, solo sus eventos |
+| `/api/admin/*` | POST | sesión con rol `admin` | |
 
-> Cambio respecto a versiones anteriores: `GET /download/<sessionId>` y `GET /logs/data` ya no existen. Conocer un `sessionId` ya no basta para descargar un APK firmado.
+Ejemplo desde consola:
+
+```bash
+AUTH=$(curl -sk https://localhost/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"userToken":"TU_TOKEN","mfaCode":"123456"}' | jq -r .authToken)
+
+curl -sk https://localhost/logs/data \
+  -H "Authorization: Bearer $AUTH" \
+  -H 'Content-Type: application/json' -d '{"limit":50}' | jq
+```
+
+### Defensas frente a fuerza bruta
+
+* **Anti-replay**: cada código TOTP se canjea una única vez. El contador consumido se guarda por usuario, así que un código capturado no sirve para abrir una segunda sesión.
+* **Bloqueo por intentos**: tras `MAX_AUTH_FAILURES` (5) intentos fallidos, el usuario queda bloqueado `AUTH_LOCKOUT_MINUTES` (15) minutos, incluso si después acierta. Los tokens desconocidos se contabilizan por IP.
+* **Rate limiting en nginx**: `/api/auth/login` limitado a 12 peticiones/minuto por IP, `/inspect` a 20/minuto y 3 conexiones simultáneas, el resto a 10/segundo. Devuelve `429`.
+
+El estado (sesiones, contadores y bloqueos) vive en `AUTH_STATE_PATH` con bloqueo exclusivo de fichero, para que sea coherente entre los varios workers de gunicorn.
+
+> Cambios respecto a versiones anteriores: `GET /download/<sessionId>` y `GET /logs/data` ya no existen, y `/sign`, `/download`, `/logs/data` y `/api/admin/*` ya no aceptan `userToken`/`mfaCode`/`adminToken`/`adminCode`: usan la sesión.
+
+## Alineado de los APK
+
+Antes de firmar, el servicio ejecuta `zipalign -p -f 4` sobre el APK subido. Es obligatorio hacerlo **antes** de firmar: alinear después invalidaría la firma. `setup.sh` y el `Dockerfile` instalan `zipalign` junto a `aapt2` y `apksigner.jar`.
+
+Si `zipalign` no está configurado o falla, la firma continúa pero la respuesta incluye `"aligned": false` y un `warning`, y queda registrado en la traza. Comprueba `zipalign_exists` en `/healthz`.
+
+## Aislamiento del servicio
+
+La unit de systemd corre con `ProtectSystem=strict`, `PrivateTmp`, `NoNewPrivileges` y `SystemCallFilter=@system-service`, con `/opt/apk-signer` como único árbol escribible.
+
+Dos avisos si tocas ese fichero:
+
+* `MemoryDenyWriteExecute` **no** está activado a propósito: la JVM que ejecuta `apksigner` necesita páginas W+X para el JIT y el servicio no arrancaría.
+* `SystemCallFilter` es el candado más restrictivo. Si `apksigner` empieza a fallar tras actualizar Java, es lo primero que hay que comentar.
+
+Para sacar las contraseñas del árbol de la aplicación, deja el fichero en `/etc/apk-signer/secrets.json` (`root:root`, `0600`) y descomenta la línea `LoadCredential=` de la unit. La aplicación lo detecta por `$CREDENTIALS_DIRECTORY` sin ningún otro cambio.
 
 Para más detalles y solución de errores, revisa `docs/INSTALACION.md` y `docs/RESUMEN_ERRORES.md`.
 

@@ -7,3 +7,12 @@ User=apk-signer
 Group=apk-signer
 WorkingDirectory=/opt/apk-signer
 ExecStart=/opt/apk-signer/.venv/bin/python /opt/apk-signer/tools/cleanup.py
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/opt/apk-signer

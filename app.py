@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import base64
+import fcntl
 import hashlib
 import hmac
 import io
@@ -10,17 +11,34 @@ import secrets
 import shutil
 import subprocess
 import time
-from datetime import datetime, timezone
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 from urllib.parse import quote
 
 import qrcode
 from flask import Flask, jsonify, request, send_from_directory, send_file
+from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
+from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
 BASE_DIR = Path(__file__).resolve().parent
-SECRETS_PATH = BASE_DIR / "secrets.json"
+
+def _resolve_secrets_path() -> Path:
+    """
+    Si systemd inyecta el secreto con LoadCredential=, viene en
+    $CREDENTIALS_DIRECTORY y el fichero nunca toca el árbol de la aplicación.
+    Si no, se usa el secrets.json de siempre junto a app.py.
+    """
+    cred_dir = os.environ.get("CREDENTIALS_DIRECTORY", "").strip()
+    if cred_dir:
+        candidate = Path(cred_dir) / "secrets.json"
+        if candidate.exists():
+            return candidate
+    return BASE_DIR / "secrets.json"
+
+SECRETS_PATH = _resolve_secrets_path()
 SECRETS_MISSING = False
 SECRETS_ERROR: Optional[str] = None
 
@@ -45,6 +63,7 @@ SEC = _load_secrets()
 
 AAPT_BIN = str(SEC.get("AAPT", "")).strip()  # ruta absoluta a aapt2 o aapt
 APKSIGNER_JAR = str(SEC.get("APKSIGNER_JAR", "")).strip()
+ZIPALIGN_BIN = str(SEC.get("ZIPALIGN", "")).strip()
 KEYSTORE_PATH = str(SEC.get("KEYSTORE_PATH", "")).strip()
 KS_PASS = str(SEC.get("KS_PASS", "")).strip()
 KEY_ALIAS = str(SEC.get("KEY_ALIAS", "")).strip()
@@ -53,11 +72,33 @@ KEY_PASS = str(SEC.get("KEY_PASS", "")).strip()
 WORK_DIR = Path(str(SEC.get("WORK_DIR", str(BASE_DIR / "work"))))
 LOG_DIR = Path(str(SEC.get("LOG_DIR", str(BASE_DIR / "logs"))))
 USERS_PATH = Path(str(SEC.get("USERS_PATH", str(BASE_DIR / "users.json"))))
+AUTH_STATE_PATH = Path(str(SEC.get("AUTH_STATE_PATH", str(WORK_DIR / "auth_state.json"))))
 MAX_CONTENT_LENGTH = int(SEC.get("MAX_CONTENT_LENGTH", 100 * 1024 * 1024))  # 100MB default
 SESSION_TTL_HOURS = int(SEC.get("SESSION_TTL_HOURS", 24))
 LOG_MAX_LINES = int(SEC.get("LOG_MAX_LINES", 2000))
 
+# Sesión de autenticación: un TOTP se canjea una vez por una sesión corta que
+# autoriza firmar, verificar, descargar y consultar la traza.
+AUTH_TTL_MINUTES = int(SEC.get("AUTH_TTL_MINUTES", 15))
+MAX_AUTH_FAILURES = int(SEC.get("MAX_AUTH_FAILURES", 5))
+AUTH_LOCKOUT_MINUTES = int(SEC.get("AUTH_LOCKOUT_MINUTES", 15))
+
+# Nº de proxies de confianza delante de la app (nginx = 1). Con 0 se ignora
+# por completo X-Forwarded-For.
+TRUSTED_PROXIES = int(SEC.get("TRUSTED_PROXIES", 1))
+
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
+
+if TRUSTED_PROXIES > 0:
+    # Sin esto, cualquiera falsifica la IP de la traza con una cabecera
+    # X-Forwarded-For. ProxyFix solo confía en los N saltos declarados.
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app,
+        x_for=TRUSTED_PROXIES,
+        x_proto=TRUSTED_PROXIES,
+        x_host=0,
+        x_prefix=0,
+    )
 
 LOG_FILE = LOG_DIR / "app.jsonl"
 
@@ -148,8 +189,9 @@ def save_session_meta(sid: str, meta: Dict[str, Any]) -> None:
     session_meta_path(sid).write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 def client_ip() -> str:
-    # si detrás de proxy, ajustar a tu realidad. Por defecto, REMOTE_ADDR.
-    return request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.remote_addr or ""
+    # remote_addr ya viene corregido por ProxyFix cuando TRUSTED_PROXIES > 0.
+    # Nunca se lee X-Forwarded-For a mano: era falsificable por cualquiera.
+    return request.remote_addr or ""
 
 def _canon_json(obj: Dict[str, Any]) -> bytes:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
@@ -221,18 +263,113 @@ def _totp_code(secret: str, for_time: Optional[int] = None, step: int = 30, digi
     )
     return str(binary % (10 ** digits)).zfill(digits)
 
-def verify_totp(secret: str, code: str, step: int = 30, digits: int = 6, skew: int = 2) -> bool:
+def verify_totp_counter(secret: str, code: str, step: int = 30, digits: int = 6, skew: int = 2) -> Optional[int]:
+    """
+    Devuelve el contador TOTP con el que casa el código, o None si no es válido.
+    El contador es lo que permite detectar la reutilización de un código.
+    """
     code = str(code or "").strip()
     if not re.fullmatch(rf"\d{{{digits}}}", code):
-        return False
+        return None
     now = int(time.time())
     try:
         for offset in range(-skew, skew + 1):
-            if hmac.compare_digest(code, _totp_code(secret, now + offset * step, step=step, digits=digits)):
-                return True
+            at = now + offset * step
+            if hmac.compare_digest(code, _totp_code(secret, at, step=step, digits=digits)):
+                return int(at / step)
     except Exception:
-        return False
-    return False
+        return None
+    return None
+
+# ----------------------------
+# Estado de autenticación (sesiones, anti-replay y bloqueo por intentos)
+#
+# Vive en un fichero con bloqueo exclusivo (flock) porque gunicorn arranca
+# varios workers: un contador en memoria daría un límite por worker y el
+# anti-replay no vería los códigos consumidos por el proceso vecino.
+# ----------------------------
+@contextmanager
+def _auth_state() -> Iterator[Dict[str, Any]]:
+    """
+    Abre el estado de autenticación con bloqueo exclusivo y lo persiste al salir.
+
+    IMPORTANTE: la escritura va en un `finally`, así que el estado se guarda
+    TAMBIÉN cuando el bloque lanza una excepción. Es deliberado: los intentos
+    fallidos se registran y acto seguido se lanza PermissionError, y si la
+    escritura dependiera de una salida limpia el contador de fallos no se
+    guardaría nunca y el bloqueo por intentos no llegaría a activarse.
+    """
+    safe_mkdir(AUTH_STATE_PATH.parent)
+    fd = os.open(str(AUTH_STATE_PATH), os.O_RDWR | os.O_CREAT, 0o600)
+    with os.fdopen(fd, "r+", encoding="utf-8") as fp:
+        fcntl.flock(fp.fileno(), fcntl.LOCK_EX)
+        try:
+            raw = fp.read()
+            try:
+                state = json.loads(raw) if raw.strip() else {}
+            except json.JSONDecodeError:
+                state = {}
+            if not isinstance(state, dict):
+                state = {}
+            state.setdefault("sessions", {})
+            state.setdefault("totp", {})
+            state.setdefault("failures", {})
+
+            try:
+                yield state
+            finally:
+                _prune_auth_state(state)
+                fp.seek(0)
+                fp.truncate()
+                fp.write(json.dumps(state, ensure_ascii=False))
+                fp.flush()
+                os.fsync(fp.fileno())
+        finally:
+            fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+
+def _prune_auth_state(state: Dict[str, Any]) -> None:
+    now = datetime.now(timezone.utc)
+    sessions = state.get("sessions", {})
+    for key in [k for k, v in sessions.items() if _parse_iso(v.get("expiresAt")) <= now]:
+        sessions.pop(key, None)
+    failures = state.get("failures", {})
+    for key in [k for k, v in failures.items() if _parse_iso(v.get("resetAt")) <= now]:
+        failures.pop(key, None)
+
+def _parse_iso(value: Any) -> datetime:
+    try:
+        return datetime.fromisoformat(str(value))
+    except Exception:
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+def _lock_remaining(entry: Dict[str, Any]) -> int:
+    """Segundos que quedan de bloqueo, 0 si no está bloqueado."""
+    if int(entry.get("count", 0)) < MAX_AUTH_FAILURES:
+        return 0
+    delta = _parse_iso(entry.get("resetAt")) - datetime.now(timezone.utc)
+    return max(0, int(delta.total_seconds()))
+
+def _register_failure(state: Dict[str, Any], key: str) -> None:
+    failures = state.setdefault("failures", {})
+    entry = failures.get(key) or {}
+    now = datetime.now(timezone.utc)
+    if _parse_iso(entry.get("resetAt")) <= now:
+        entry = {"count": 0}
+    entry["count"] = int(entry.get("count", 0)) + 1
+    entry["resetAt"] = (now + timedelta(minutes=AUTH_LOCKOUT_MINUTES)).isoformat()
+    failures[key] = entry
+
+def _new_auth_session(state: Dict[str, Any], user: Dict[str, Any]) -> Tuple[str, str]:
+    token = secrets.token_urlsafe(32)
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=AUTH_TTL_MINUTES)).isoformat()
+    state.setdefault("sessions", {})[_hash_token(token)] = {
+        "userId": user.get("id", ""),
+        "name": user.get("name", ""),
+        "role": user.get("role", ""),
+        "createdAt": utc_now_iso(),
+        "expiresAt": expires_at,
+    }
+    return token, expires_at
 
 def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -264,27 +401,85 @@ def find_user_by_token(token: str) -> Optional[Dict[str, Any]]:
             return user
     return None
 
-def require_user(user_token: str, mfa_code: str) -> Dict[str, Any]:
+class AuthLocked(PermissionError):
+    """Demasiados intentos fallidos: bloqueo temporal."""
+    def __init__(self, seconds: int):
+        self.seconds = seconds
+        minutes = max(1, (seconds + 59) // 60)
+        super().__init__(f"Demasiados intentos fallidos. Reintenta en {minutes} min.")
+
+def login(user_token: str, mfa_code: str) -> Tuple[str, str, Dict[str, Any]]:
     """
-    Valida token + MFA de cualquier usuario (admin o no). Lanza PermissionError.
+    Canjea token + MFA por una sesión corta. Devuelve (authToken, expiresAt, user).
+
+    Aplica, bajo un único bloqueo de fichero:
+      - bloqueo temporal tras MAX_AUTH_FAILURES intentos,
+      - anti-replay: un contador TOTP no se acepta dos veces.
     """
     try:
         user = find_user_by_token(user_token)
     except Exception as e:
         raise PermissionError(str(e))
-    if not user:
-        raise PermissionError("Token de usuario inválido")
-    if not verify_totp(str(user.get("totp_secret", "")), mfa_code):
-        raise PermissionError("MFA incorrecto")
-    return user
 
-def require_admin(admin_token: str, admin_code: str) -> Dict[str, Any]:
-    user = find_user_by_token(admin_token)
-    if not user or user.get("role") != "admin":
-        raise PermissionError("Token de administrador inválido")
-    if not verify_totp(str(user.get("totp_secret", "")), admin_code):
-        raise PermissionError("MFA inválido")
-    return user
+    # Un token desconocido no identifica a nadie: se contabiliza por IP para
+    # que adivinar tokens también acabe bloqueado.
+    fail_key = f"user:{user['id']}" if user else f"ip:{client_ip()}"
+
+    with _auth_state() as state:
+        entry = state.get("failures", {}).get(fail_key) or {}
+        remaining = _lock_remaining(entry)
+        if remaining > 0:
+            raise AuthLocked(remaining)
+
+        if not user:
+            _register_failure(state, fail_key)
+            raise PermissionError("Credenciales inválidas")
+
+        counter = verify_totp_counter(str(user.get("totp_secret", "")), mfa_code)
+        if counter is None:
+            _register_failure(state, fail_key)
+            raise PermissionError("Credenciales inválidas")
+
+        user_id = str(user.get("id", ""))
+        last_counter = int(state.get("totp", {}).get(user_id, -1))
+        if counter <= last_counter:
+            # Código ya canjeado: no se cuenta como fallo (no es un intento de
+            # adivinar), pero tampoco se acepta.
+            raise PermissionError("Ese código MFA ya se ha usado. Espera al siguiente.")
+
+        state.setdefault("totp", {})[user_id] = counter
+        state.get("failures", {}).pop(fail_key, None)
+        auth_token, expires_at = _new_auth_session(state, user)
+
+    return auth_token, expires_at, user
+
+def require_session(auth_token: str) -> Dict[str, Any]:
+    """
+    Valida una sesión emitida por login(). Devuelve {id, name, role}.
+    """
+    auth_token = (auth_token or "").strip()
+    if not auth_token:
+        raise PermissionError("Sesión requerida")
+
+    with _auth_state() as state:
+        sess = state.get("sessions", {}).get(_hash_token(auth_token))
+        if not sess:
+            raise PermissionError("Sesión inválida o caducada")
+        if _parse_iso(sess.get("expiresAt")) <= datetime.now(timezone.utc):
+            state["sessions"].pop(_hash_token(auth_token), None)
+            raise PermissionError("Sesión inválida o caducada")
+        return {
+            "id": sess.get("userId", ""),
+            "name": sess.get("name", ""),
+            "role": sess.get("role", ""),
+        }
+
+def logout(auth_token: str) -> None:
+    auth_token = (auth_token or "").strip()
+    if not auth_token:
+        return
+    with _auth_state() as state:
+        state.get("sessions", {}).pop(_hash_token(auth_token), None)
 
 def build_otpauth_uri(label: str, secret: str, issuer: str = "APK Signer") -> str:
     label_enc = quote(label.strip().replace(" ", ""))
@@ -419,6 +614,8 @@ def healthz():
         "aapt_configured": bool(AAPT_BIN),
         "aapt_exists": aapt_exists(),
         "apksigner_jar_exists": check_bin(APKSIGNER_JAR),
+        "zipalign_configured": bool(ZIPALIGN_BIN),
+        "zipalign_exists": check_bin(ZIPALIGN_BIN),
         "keystore_exists": check_bin(KEYSTORE_PATH),
         "secrets_exists": SECRETS_PATH.exists(),
         "secrets_error": SECRETS_ERROR or "",
@@ -442,7 +639,90 @@ def healthz():
     except Exception:
         pass
 
-    return jsonify({"ok": True, "checks": checks, "now": utc_now_iso(), "version": "1.6.0"})
+    return jsonify({
+        "ok": True,
+        "checks": checks,
+        "auth": {
+            "sessionTtlMinutes": AUTH_TTL_MINUTES,
+            "maxFailures": MAX_AUTH_FAILURES,
+            "lockoutMinutes": AUTH_LOCKOUT_MINUTES,
+            "trustedProxies": TRUSTED_PROXIES,
+        },
+        "now": utc_now_iso(),
+        "version": "1.7.0",
+    })
+
+# ----------------------------
+# Errores: siempre JSON, nunca la página HTML de Werkzeug
+# ----------------------------
+@app.errorhandler(RequestEntityTooLarge)
+def _err_too_large(e):
+    mb = MAX_CONTENT_LENGTH / (1024 * 1024)
+    return jsonify({"ok": False, "error": f"El fichero supera el límite de {mb:.0f} MB"}), 413
+
+@app.errorhandler(HTTPException)
+def _err_http(e):
+    return jsonify({"ok": False, "error": e.description, "status": e.code}), e.code
+
+@app.errorhandler(subprocess.TimeoutExpired)
+def _err_timeout(e):
+    log_event("error", ok=False, path=request.path, error=f"timeout: {e}")
+    return jsonify({"ok": False, "error": "La operación superó el tiempo máximo"}), 504
+
+@app.errorhandler(Exception)
+def _err_unhandled(e):
+    log_event("error", ok=False, path=request.path, error=repr(e))
+    return jsonify({"ok": False, "error": "Error interno del servicio"}), 500
+
+# ----------------------------
+# Autenticación
+# ----------------------------
+@app.post("/api/auth/login")
+def auth_login():
+    payload = request.get_json(force=True, silent=True) or {}
+    user_token = str(payload.get("userToken", "")).strip()
+    mfa_code = str(payload.get("mfaCode", "")).strip()
+
+    if not user_token or not mfa_code:
+        return jsonify({"ok": False, "error": "Faltan token y código MFA"}), 400
+
+    try:
+        auth_token, expires_at, user = login(user_token, mfa_code)
+    except AuthLocked as e:
+        log_event("login", ok=False, error=str(e))
+        return jsonify({"ok": False, "error": str(e), "lockedSeconds": e.seconds}), 429
+    except PermissionError as e:
+        log_event("login", ok=False, error=str(e))
+        return jsonify({"ok": False, "error": str(e)}), 403
+
+    log_event("login", ok=True, userId=user.get("id", ""), userName=user.get("name", ""))
+    return jsonify({
+        "ok": True,
+        "authToken": auth_token,
+        "expiresAt": expires_at,
+        "user": {"id": user.get("id", ""), "name": user.get("name", ""), "role": user.get("role", "")},
+    }), 200
+
+@app.post("/api/auth/logout")
+def auth_logout():
+    payload = request.get_json(force=True, silent=True) or {}
+    logout(str(payload.get("authToken", "")).strip())
+    return jsonify({"ok": True}), 200
+
+def _session_from_request(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Acepta la sesión en la cabecera Authorization: Bearer <token> o en el
+    cuerpo JSON. Lanza PermissionError si no es válida.
+    """
+    header = request.headers.get("Authorization", "")
+    token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+    return require_session(token or str(payload.get("authToken", "")).strip())
+
+def _admin_from_request(payload: Dict[str, Any]) -> Dict[str, Any]:
+    user = _session_from_request(payload)
+    if user.get("role") != "admin":
+        raise PermissionError("Se requiere rol de administrador")
+    return user
 
 @app.post("/inspect")
 def inspect_ep():
@@ -535,8 +815,6 @@ def _signed_filename(original_name: str) -> str:
 def sign_ep():
     payload = request.get_json(force=True, silent=True) or {}
     sid = str(payload.get("sessionId", "")).strip()
-    user_token = str(payload.get("userToken", "")).strip()
-    mfa_code = str(payload.get("mfaCode", "")).strip()
 
     if not sid:
         return jsonify({"ok": False, "error": "Falta sessionId"}), 400
@@ -544,14 +822,12 @@ def sign_ep():
         return jsonify({"ok": False, "error": "sessionId inválido"}), 400
     if SECRETS_ERROR or SECRETS_MISSING:
         return jsonify({"ok": False, "error": "Falta configurar secrets.json"}), 503
-    if not user_token or not mfa_code:
-        return jsonify({"ok": False, "error": "Faltan credenciales MFA"}), 400
 
     try:
-        user = require_user(user_token, mfa_code)
+        user = _session_from_request(payload)
     except PermissionError as e:
         log_event("sign", ok=False, sessionId=sid, error=str(e))
-        return jsonify({"ok": False, "error": "MFA incorrecto"}), 403
+        return jsonify({"ok": False, "error": str(e)}), 403
 
     try:
         meta = load_session_meta(sid)
@@ -578,6 +854,26 @@ def sign_ep():
         )
         return jsonify({"ok": False, "error": err}), 500
 
+    # zipalign ANTES de firmar: apksigner preserva el alineado, pero alinear
+    # después invalidaría la firma. Sin alinear, los recursos sin comprimir no
+    # se pueden mapear en memoria en el dispositivo.
+    sign_input = in_path
+    align_warning = ""
+    if check_bin(ZIPALIGN_BIN):
+        aligned_path = session_dir(sid) / "aligned.apk"
+        rc_a, out_a, err_a = run_cmd(
+            [ZIPALIGN_BIN, "-p", "-f", "4", str(in_path), str(aligned_path)],
+            timeout=120,
+        )
+        if rc_a == 0 and aligned_path.exists():
+            sign_input = aligned_path
+        else:
+            align_warning = (err_a or out_a or f"zipalign falló (rc={rc_a})").strip()
+            log_event("zipalign", ok=False, sessionId=sid, error=align_warning,
+                      userId=user.get("id", ""), userName=user.get("name", ""))
+    else:
+        align_warning = "zipalign no configurado: el APK se firma sin alinear"
+
     # Las contraseñas se pasan por entorno (env:VAR), no por argv: cualquier
     # usuario local vería `pass:<contraseña>` en `ps` durante la firma.
     args = [
@@ -589,7 +885,7 @@ def sign_ep():
         "--ks-pass", "env:APK_SIGNER_KS_PASS",
         "--ks-key-alias", KEY_ALIAS,
         "--key-pass", "env:APK_SIGNER_KEY_PASS",
-        "--in", str(in_path),
+        "--in", str(sign_input),
         "--out", str(out_path),
     ]
     sign_env = {
@@ -624,6 +920,7 @@ def sign_ep():
         "id": user.get("id", ""),
         "name": user.get("name", ""),
     }
+    meta["aligned"] = sign_input != in_path
     save_session_meta(sid, meta)
 
     log_event(
@@ -642,6 +939,8 @@ def sign_ep():
         "message": "Firma correcta",
         "sessionId": sid,
         "signedName": signed_name,
+        "aligned": meta["aligned"],
+        "warning": align_warning,
         "stdout": out,
         "stderr": err
     }), 200
@@ -719,21 +1018,17 @@ def download_ep():
     """
     payload = request.get_json(force=True, silent=True) or {}
     sid = str(payload.get("sessionId", "")).strip()
-    user_token = str(payload.get("userToken", "")).strip()
-    mfa_code = str(payload.get("mfaCode", "")).strip()
 
     if not sid:
         return jsonify({"ok": False, "error": "Falta sessionId"}), 400
     if not valid_sid(sid):
         return jsonify({"ok": False, "error": "sessionId inválido"}), 400
-    if not user_token or not mfa_code:
-        return jsonify({"ok": False, "error": "Faltan credenciales MFA"}), 400
 
     try:
-        user = require_user(user_token, mfa_code)
+        user = _session_from_request(payload)
     except PermissionError as e:
         log_event("download", ok=False, sessionId=sid, error=str(e))
-        return jsonify({"ok": False, "error": "MFA incorrecto"}), 403
+        return jsonify({"ok": False, "error": str(e)}), 403
 
     try:
         meta = load_session_meta(sid)
@@ -782,22 +1077,20 @@ def download_ep():
 @app.post("/api/admin/verify")
 def admin_verify():
     payload = request.get_json(force=True, silent=True) or {}
-    admin_token = str(payload.get("adminToken", "")).strip()
-    admin_code = str(payload.get("adminCode", "")).strip()
+
     try:
-        admin = require_admin(admin_token, admin_code)
-    except Exception as e:
+        admin = _admin_from_request(payload)
+    except PermissionError as e:
         return jsonify({"ok": False, "error": str(e)}), 403
     return jsonify({"ok": True, "admin": {"id": admin.get("id", ""), "name": admin.get("name", "")}}), 200
 
 @app.post("/api/admin/users/list")
 def admin_users_list():
     payload = request.get_json(force=True, silent=True) or {}
-    admin_token = str(payload.get("adminToken", "")).strip()
-    admin_code = str(payload.get("adminCode", "")).strip()
+
     try:
-        require_admin(admin_token, admin_code)
-    except Exception as e:
+        _admin_from_request(payload)
+    except PermissionError as e:
         return jsonify({"ok": False, "error": str(e)}), 403
 
     try:
@@ -817,15 +1110,14 @@ def admin_users_list():
 @app.post("/api/admin/users/create")
 def admin_users_create():
     payload = request.get_json(force=True, silent=True) or {}
-    admin_token = str(payload.get("adminToken", "")).strip()
-    admin_code = str(payload.get("adminCode", "")).strip()
+
     name = str(payload.get("name", "")).strip()
     if not name:
         return jsonify({"ok": False, "error": "Nombre requerido"}), 400
 
     try:
-        require_admin(admin_token, admin_code)
-    except Exception as e:
+        _admin_from_request(payload)
+    except PermissionError as e:
         return jsonify({"ok": False, "error": str(e)}), 403
 
     try:
@@ -869,15 +1161,14 @@ def admin_users_create():
 @app.post("/api/admin/users/delete")
 def admin_users_delete():
     payload = request.get_json(force=True, silent=True) or {}
-    admin_token = str(payload.get("adminToken", "")).strip()
-    admin_code = str(payload.get("adminCode", "")).strip()
+
     user_id = str(payload.get("userId", "")).strip()
     if not user_id:
         return jsonify({"ok": False, "error": "userId requerido"}), 400
 
     try:
-        require_admin(admin_token, admin_code)
-    except Exception as e:
+        _admin_from_request(payload)
+    except PermissionError as e:
         return jsonify({"ok": False, "error": str(e)}), 403
 
     try:
@@ -906,14 +1197,9 @@ def logs_data():
     Un admin ve todo; un usuario normal solo sus propios eventos.
     """
     payload = request.get_json(force=True, silent=True) or {}
-    user_token = str(payload.get("userToken", "")).strip()
-    mfa_code = str(payload.get("mfaCode", "")).strip()
-
-    if not user_token or not mfa_code:
-        return jsonify({"ok": False, "error": "Faltan credenciales MFA"}), 400
 
     try:
-        user = require_user(user_token, mfa_code)
+        user = _session_from_request(payload)
     except PermissionError as e:
         return jsonify({"ok": False, "error": str(e)}), 403
 

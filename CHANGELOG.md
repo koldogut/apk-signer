@@ -6,6 +6,34 @@ El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1
 y el proyecto sigue [Semantic Versioning](https://semver.org/lang/es/).
 
 ## [Unreleased]
+
+## [1.7.0] - 2026-08-31
+### Security
+- Autenticación por sesión corta: token + MFA se canjean una sola vez en `POST /api/auth/login` por un `authToken` con caducidad (15 min por defecto) que autoriza firmar, verificar, descargar y consultar la traza. Nuevo `POST /api/auth/logout`.
+- Anti-replay de TOTP: el contador consumido se guarda por usuario, de modo que un código capturado no abre una segunda sesión.
+- Bloqueo temporal tras 5 intentos fallidos (15 min), aplicado también cuando el intento siguiente es correcto. Los tokens desconocidos se contabilizan por IP.
+- El estado de autenticación (sesiones, contadores, bloqueos) se guarda con bloqueo exclusivo de fichero (`flock`), de forma que es coherente entre los varios workers de gunicorn. Verificado con 8 procesos concurrentes: un único canje por código.
+- Rate limiting en nginx: 12 r/min en `/api/auth/login`, 20 r/min y 3 conexiones en `/inspect`, 10 r/s en el resto, respondiendo 429.
+- `ProxyFix` con número de proxies de confianza configurable (`TRUSTED_PROXIES`). La IP de la traza deja de leerse de `X-Forwarded-For` a mano, que era falsificable por cualquiera.
+- `/sign`, `/download`, `/logs/data` y `/api/admin/*` dejan de aceptar `userToken`/`mfaCode`/`adminToken`/`adminCode`: usan la sesión.
+- Unit de systemd endurecida: `ProtectSystem=strict`, `PrivateTmp`, `PrivateDevices`, `NoNewPrivileges`, `SystemCallFilter=@system-service` y `ReadWritePaths` acotado a `/opt/apk-signer`. `MemoryDenyWriteExecute` se deja fuera a propósito porque rompería el JIT de la JVM.
+- Soporte opcional de `LoadCredential=` de systemd: si se define, `secrets.json` se lee de `$CREDENTIALS_DIRECTORY` y no necesita vivir en el árbol de la aplicación.
+
+### Added
+- `zipalign -p -f 4` antes de firmar, instalado por `setup.sh` y por el `Dockerfile`. Si falta o falla, la firma continúa pero se informa con `"aligned": false` y un `warning`, y queda en la traza.
+- `/healthz` informa de `zipalign_configured`, `zipalign_exists` y de la configuración de sesión.
+- Indicador de sesión activa y botón "Cerrar sesión" en el portal.
+
+### Changed
+- Los errores 4xx/5xx devuelven siempre JSON en lugar de la página HTML de Werkzeug, incluidos 413 (con el límite en MB) y los timeouts de `apksigner`, que antes producían un 500 sin explicación.
+
+### Fixed
+- El contador de intentos fallidos no llegaba a persistirse: al registrarse dentro de un gestor de contexto que lanzaba a continuación `PermissionError`, la escritura posterior al `yield` se saltaba y el bloqueo nunca se activaba.
+
+### Removed
+- `verify_totp` y `require_admin_session`, sin uso tras la migración a sesiones.
+
+## [1.6.1] - 2026-08-31
 ### Security
 - El portal se sirve solo por HTTPS: nginx redirige el puerto 80 a 443 y `setup.sh` genera un certificado autofirmado si no hay uno corporativo. El token de usuario y el código MFA dejan de viajar en claro.
 - `/logs/data` deja de ser anónimo: pasa a `POST` con token + MFA. Un admin ve toda la traza; un usuario normal, solo sus propios eventos.

@@ -228,6 +228,7 @@ bootstrap_admin_user() {
 update_secrets_paths() {
   local aapt_src="${SDK_ROOT}/build-tools/${BUILD_TOOLS_VERSION}/aapt2"
   local apksigner_src="${SDK_ROOT}/build-tools/${BUILD_TOOLS_VERSION}/lib/apksigner.jar"
+  local zipalign_src="${SDK_ROOT}/build-tools/${BUILD_TOOLS_VERSION}/zipalign"
 
   if [[ -f "${apksigner_src}" ]]; then
     sudo -u "${USER_NAME}" -H cp "${apksigner_src}" "${INSTALL_DIR}/tools/apksigner.jar"
@@ -241,13 +242,20 @@ update_secrets_paths() {
     warn "No se encontró aapt2 en ${aapt_src}"
   fi
 
+  if [[ -x "${zipalign_src}" ]]; then
+    sudo -u "${USER_NAME}" -H install -m 0755 "${zipalign_src}" "${INSTALL_DIR}/tools/zipalign"
+  else
+    warn "No se encontró zipalign en ${zipalign_src}. Los APK se firmarán sin alinear."
+  fi
+
   if [[ -f "${INSTALL_DIR}/secrets.json" ]]; then
     local tmp_file
     tmp_file="$(mktemp)"
     jq \
       --arg aapt "${INSTALL_DIR}/tools/aapt2" \
       --arg apksigner "${INSTALL_DIR}/tools/apksigner.jar" \
-      '.AAPT=$aapt | .APKSIGNER_JAR=$apksigner' \
+      --arg zipalign "${INSTALL_DIR}/tools/zipalign" \
+      '.AAPT=$aapt | .APKSIGNER_JAR=$apksigner | .ZIPALIGN=$zipalign' \
       "${INSTALL_DIR}/secrets.json" > "${tmp_file}"
     mv "${tmp_file}" "${INSTALL_DIR}/secrets.json"
     chown "${USER_NAME}:${USER_NAME}" "${INSTALL_DIR}/secrets.json"
@@ -354,6 +362,10 @@ post_checks() {
 
   if [[ ! -f "${INSTALL_DIR}/tools/apksigner.jar" ]]; then
     warn "apksigner.jar no está instalado. Revisa la instalación del SDK."
+  fi
+
+  if [[ ! -x "${INSTALL_DIR}/tools/zipalign" ]]; then
+    warn "zipalign no está instalado: los APK se firmarán sin alinear."
   fi
 }
 

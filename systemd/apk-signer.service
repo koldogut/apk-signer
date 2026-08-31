@@ -13,5 +13,44 @@ Restart=on-failure
 RestartSec=2
 UMask=0027
 
+# --- Aislamiento ---
+# El servicio ejecuta java/apksigner sobre APK que suben terceros: conviene
+# que un fallo ahi no alcance al resto del sistema.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+
+# Con ProtectSystem=strict todo el disco es de solo lectura salvo lo listado.
+# Es el arbol completo de la aplicacion porque users.json se reescribe con un
+# fichero temporal en su mismo directorio, lo que exige el directorio escribible.
+ReadWritePaths=/opt/apk-signer
+
+# NOTA: MemoryDenyWriteExecute NO se activa a proposito. La JVM que ejecuta
+# apksigner necesita paginas W+X para el JIT y el servicio no arrancaria.
+#
+# NOTA: SystemCallFilter=@system-service es el candado mas restrictivo y el
+# primero que hay que quitar si apksigner empieza a fallar tras un cambio de
+# version de Java.
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# --- Secretos (opcional) ---
+# Para sacar secrets.json del arbol de la aplicacion, deja el fichero en
+# /etc/apk-signer/secrets.json (root:root 0600) y descomenta la linea. La app
+# lo detecta por $CREDENTIALS_DIRECTORY y no necesita ningun otro cambio.
+#LoadCredential=secrets.json:/etc/apk-signer/secrets.json
+
 [Install]
 WantedBy=multi-user.target

@@ -30,7 +30,8 @@ RUN mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools" \
         "build-tools;${BUILD_TOOLS_VERSION}" \
     && mkdir -p "${APP_HOME}/tools" \
     && cp "${ANDROID_SDK_ROOT}/build-tools/${BUILD_TOOLS_VERSION}/aapt2" "${APP_HOME}/tools/aapt2" \
-    && cp "${ANDROID_SDK_ROOT}/build-tools/${BUILD_TOOLS_VERSION}/lib/apksigner.jar" "${APP_HOME}/tools/apksigner.jar"
+    && cp "${ANDROID_SDK_ROOT}/build-tools/${BUILD_TOOLS_VERSION}/lib/apksigner.jar" "${APP_HOME}/tools/apksigner.jar" \
+    && cp "${ANDROID_SDK_ROOT}/build-tools/${BUILD_TOOLS_VERSION}/zipalign" "${APP_HOME}/tools/zipalign"
 
 COPY requirements.txt ${APP_HOME}/requirements.txt
 RUN pip install --no-cache-dir -r ${APP_HOME}/requirements.txt

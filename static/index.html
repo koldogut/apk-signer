@@ -16,6 +16,8 @@
       </div>
     </div>
     <div class="topbar-actions">
+      <span id="sessionInfo" class="session-info hidden"></span>
+      <button id="btnLogout" class="btn btn-ghost hidden" type="button">Cerrar sesión</button>
       <button id="btnOpenLogs" class="btn btn-ghost" type="button">Logs</button>
       <a class="btn btn-ghost" href="/healthz" target="_blank" rel="noopener">Health</a>
       <a class="btn btn-ghost" href="/admin">Gestión usuarios</a>
@@ -82,6 +84,8 @@
 
           <div class="hint">
             La descarga se habilita tras <b>firma correcta</b>.
+            El código MFA se canjea una sola vez por una <b>sesión corta</b> que
+            cubre firmar, descargar y consultar los logs.
           </div>
         </div>
       </div>
