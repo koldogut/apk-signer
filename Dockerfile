@@ -12,7 +12,7 @@ WORKDIR ${APP_HOME}
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        openjdk-17-jre \
+        default-jre-headless \
         curl \
         unzip \
         ca-certificates \

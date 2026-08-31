@@ -22,7 +22,7 @@ jobs:
         python-version: ["3.11", "3.12", "3.14"]
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
@@ -55,7 +55,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           # DEBE ser la version MINIMA soportada, no la mas nueva: pip resuelve
           # dependencias distintas segun la version de Python, y auditar solo en
@@ -68,6 +68,83 @@ jobs:
         run: bandit -r . -x ./tests,./.venv,./venv -ll
       - name: pip-audit
         run: pip-audit -r requirements.txt --strict
+
+  docker:
+    name: Imagen de Docker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Construye la imagen de verdad. Los dos fallos que se colaron hasta un
+      # despliegue real (zipalign sacado del SDK y la version de build-tools)
+      # vivian en el Dockerfile, que hasta ahora no validaba nada.
+      - name: Construir la imagen
+        run: docker build -t apk-signer:ci .
+
+      - name: El utillaje del SDK funciona dentro de la imagen
+        run: |
+          docker run --rm --entrypoint sh apk-signer:ci -c '
+            set -e
+            echo "--- rutas ---"
+            ZIPALIGN=$(python3 -c "import json;print(json.load(open(\"/opt/apk-signer/secrets.example.json\"))[\"ZIPALIGN\"])")
+            echo "ZIPALIGN segun secrets.example.json: $ZIPALIGN"
+            test -x "$ZIPALIGN" || { echo "ERROR: zipalign no existe o no es ejecutable en esa ruta"; exit 1; }
+
+            echo "--- zipalign arranca (aqui fallaba por libc++.so) ---"
+            "$ZIPALIGN" 2>&1 | head -1
+            "$ZIPALIGN" 2>&1 | grep -q "Zip alignment utility" || { echo "ERROR: zipalign no arranca"; exit 1; }
+
+            echo "--- soporta -P (necesario para alinear a 16 KB) ---"
+            "$ZIPALIGN" 2>&1 | grep -q -- "-P <pagesize_kb>" || { echo "ERROR: zipalign sin soporte de -P"; exit 1; }
+
+            echo "--- aapt2 y apksigner ---"
+            /opt/apk-signer/tools/aapt2 version
+            java -jar /opt/apk-signer/tools/apksigner.jar version
+
+            echo "--- la aplicacion importa ---"
+            cd /opt/apk-signer && python3 -c "import app; print(\"app importa OK\")"
+            echo "TODO OK"
+          '
+
+      - name: La imagen levanta y responde en /healthz
+        run: |
+          mkdir -p /tmp/ks /tmp/work /tmp/logs
+          python3 -c "
+          import json
+          s = json.load(open('secrets.example.json'))
+          s['LOG_HMAC_KEY'] = '00' * 32
+          json.dump(s, open('/tmp/secrets.json', 'w'))"
+          echo '{"users": []}' > /tmp/users.json
+          docker run -d --name apk-signer-ci -p 8001:8001 \
+            -v /tmp/secrets.json:/opt/apk-signer/secrets.json \
+            -v /tmp/users.json:/opt/apk-signer/users.json \
+            -v /tmp/ks:/opt/apk-signer/keystore \
+            -v /tmp/work:/opt/apk-signer/work \
+            -v /tmp/logs:/opt/apk-signer/logs \
+            apk-signer:ci
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8001/healthz >/dev/null 2>&1 && break
+            sleep 1
+          done
+          echo "--- /healthz ---"
+          curl -fsS http://127.0.0.1:8001/healthz | python3 -m json.tool
+          curl -fsS http://127.0.0.1:8001/healthz | python3 -c "
+          import json, sys
+          c = json.load(sys.stdin)['checks']
+          fallos = [k for k in ('aapt_exists','apksigner_jar_exists','zipalign_exists','java','work_writable') if not c[k]]
+          if fallos:
+              print('FALLAN:', fallos); sys.exit(1)
+          if c['zipalign_page_kb'] != 16:
+              print('zipalign_page_kb =', c['zipalign_page_kb'], 'se esperaba 16'); sys.exit(1)
+          print('comprobaciones del contenedor OK, alineado a', c['zipalign_page_kb'], 'KB')"
+
+      - name: Registros del contenedor si algo falla
+        if: failure()
+        run: docker logs apk-signer-ci || true
+
+      - name: Limpieza
+        if: always()
+        run: docker rm -f apk-signer-ci || true
 
   nginx:
     name: Configuracion de nginx
