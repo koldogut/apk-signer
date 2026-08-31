@@ -6,6 +6,8 @@ El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1
 y el proyecto sigue [Semantic Versioning](https://semver.org/lang/es/).
 
 ## [Unreleased]
+### Security
+- Flask sube de 3.0.3 a 3.1.3 por PYSEC-2026-2151, detectado por `pip-audit` en la primera ejecución del CI. Los 95 tests pasan sin cambios en 3.1.3.
 
 ## [1.8.0] - 2026-08-31
 ### Added
