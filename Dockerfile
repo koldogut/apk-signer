@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 ENV APP_HOME=/opt/apk-signer \
     ANDROID_SDK_ROOT=/opt/android-sdk \
