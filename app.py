@@ -16,7 +16,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 import qrcode
-from flask import Flask, jsonify, request, send_from_directory, send_file, abort
+from flask import Flask, jsonify, request, send_from_directory, send_file
+from werkzeug.utils import secure_filename
 
 BASE_DIR = Path(__file__).resolve().parent
 SECRETS_PATH = BASE_DIR / "secrets.json"
@@ -93,19 +94,43 @@ def sha256_file(path: Path) -> str:
 def check_bin(path: str) -> bool:
     return bool(path) and Path(path).exists()
 
-def run_cmd(args: List[str], timeout: int = 60) -> Tuple[int, str, str]:
+def run_cmd(args: List[str], timeout: int = 60, env: Optional[Dict[str, str]] = None) -> Tuple[int, str, str]:
+    # env se fusiona con el entorno del proceso; se usa para pasar secretos
+    # (contraseñas de keystore) sin exponerlos en la línea de comandos.
+    run_env = {**os.environ, **env} if env else None
     p = subprocess.run(
         args,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         timeout=timeout,
+        env=run_env,
     )
     return p.returncode, p.stdout, p.stderr
 
 def new_session_id() -> str:
     # URL-safe, corto, suficiente para sesiones temporales
     return secrets.token_urlsafe(12)
+
+# Los sessionId generados son [A-Za-z0-9_-]{16}. Validar el formato evita que un
+# sessionId recibido por parámetro escape del árbol de WORK_DIR.
+_SID_RE = re.compile(r"[A-Za-z0-9_-]{8,64}")
+
+def valid_sid(sid: str) -> bool:
+    return bool(_SID_RE.fullmatch(sid or ""))
+
+def safe_apk_name(original_name: str, fallback: str = "app.apk") -> str:
+    """
+    Normaliza un nombre de fichero recibido del cliente a un nombre plano y sin
+    componentes de ruta. Werkzeug NO sanea FileStorage.filename, así que usarlo
+    sin filtrar para construir rutas permitiría escribir fuera de la sesión.
+    """
+    base = secure_filename(Path(str(original_name or "")).name)
+    if not base:
+        return fallback
+    if not base.lower().endswith(".apk"):
+        base = f"{base}.apk"
+    return base
 
 def session_dir(sid: str) -> Path:
     return WORK_DIR / "sessions" / sid
@@ -239,6 +264,20 @@ def find_user_by_token(token: str) -> Optional[Dict[str, Any]]:
             return user
     return None
 
+def require_user(user_token: str, mfa_code: str) -> Dict[str, Any]:
+    """
+    Valida token + MFA de cualquier usuario (admin o no). Lanza PermissionError.
+    """
+    try:
+        user = find_user_by_token(user_token)
+    except Exception as e:
+        raise PermissionError(str(e))
+    if not user:
+        raise PermissionError("Token de usuario inválido")
+    if not verify_totp(str(user.get("totp_secret", "")), mfa_code):
+        raise PermissionError("MFA incorrecto")
+    return user
+
 def require_admin(admin_token: str, admin_code: str) -> Dict[str, Any]:
     user = find_user_by_token(admin_token)
     if not user or user.get("role") != "admin":
@@ -338,7 +377,12 @@ def add_headers(resp):
     resp.headers["Referrer-Policy"] = "no-referrer"
     resp.headers["Cross-Origin-Resource-Policy"] = "same-origin"
     resp.headers["Permissions-Policy"] = "clipboard-read=(self), clipboard-write=(self)"
-    resp.headers["Cache-Control"] = "public, max-age=600"
+    # Solo los assets estáticos son cacheables. El resto (APK firmado, logs,
+    # listados de usuarios) no debe quedar en caché de navegador ni de proxy.
+    if request.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "public, max-age=600"
+    else:
+        resp.headers["Cache-Control"] = "no-store"
     resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     # CSP: sin inline JS. CSS self.
     resp.headers["Content-Security-Policy"] = (
@@ -407,9 +451,13 @@ def inspect_ep():
         return jsonify({"ok": False, "error": "Falta fichero (campo 'apk')"}), 400
 
     f = request.files["apk"]
-    original_name = (f.filename or "input.apk").strip()
-    if not original_name.lower().endswith(".apk"):
+    raw_name = (f.filename or "input.apk").strip()
+    if not raw_name.lower().endswith(".apk"):
         return jsonify({"ok": False, "error": "El fichero debe ser .apk"}), 400
+
+    # A partir de aquí solo se usa el nombre saneado: es el que acabará
+    # formando la ruta del APK firmado.
+    original_name = safe_apk_name(raw_name, fallback="input.apk")
 
     safe_mkdir(WORK_DIR / "sessions")
     sid = new_session_id()
@@ -478,7 +526,7 @@ def inspect_ep():
     return jsonify({"ok": True, **data}), 200
 
 def _signed_filename(original_name: str) -> str:
-    base = original_name
+    base = safe_apk_name(original_name)
     if base.lower().endswith(".apk"):
         base = base[:-4]
     return f"{base}_signed.apk"
@@ -492,14 +540,17 @@ def sign_ep():
 
     if not sid:
         return jsonify({"ok": False, "error": "Falta sessionId"}), 400
+    if not valid_sid(sid):
+        return jsonify({"ok": False, "error": "sessionId inválido"}), 400
     if SECRETS_ERROR or SECRETS_MISSING:
         return jsonify({"ok": False, "error": "Falta configurar secrets.json"}), 503
     if not user_token or not mfa_code:
         return jsonify({"ok": False, "error": "Faltan credenciales MFA"}), 400
 
-    user = find_user_by_token(user_token)
-    if not user or not verify_totp(str(user.get("totp_secret", "")), mfa_code):
-        log_event("sign", ok=False, sessionId=sid, error="MFA incorrecto")
+    try:
+        user = require_user(user_token, mfa_code)
+    except PermissionError as e:
+        log_event("sign", ok=False, sessionId=sid, error=str(e))
         return jsonify({"ok": False, "error": "MFA incorrecto"}), 403
 
     try:
@@ -527,21 +578,27 @@ def sign_ep():
         )
         return jsonify({"ok": False, "error": err}), 500
 
+    # Las contraseñas se pasan por entorno (env:VAR), no por argv: cualquier
+    # usuario local vería `pass:<contraseña>` en `ps` durante la firma.
     args = [
         "java", "-jar", APKSIGNER_JAR,
         "sign",
         "--v1-signing-enabled", "true",
         "--v2-signing-enabled", "true",
         "--ks", KEYSTORE_PATH,
-        "--ks-pass", f"pass:{KS_PASS}",
+        "--ks-pass", "env:APK_SIGNER_KS_PASS",
         "--ks-key-alias", KEY_ALIAS,
-        "--key-pass", f"pass:{KEY_PASS}",
+        "--key-pass", "env:APK_SIGNER_KEY_PASS",
         "--in", str(in_path),
         "--out", str(out_path),
     ]
+    sign_env = {
+        "APK_SIGNER_KS_PASS": KS_PASS,
+        "APK_SIGNER_KEY_PASS": KEY_PASS,
+    }
 
     t0 = time.time()
-    rc, out, err = run_cmd(args, timeout=120)
+    rc, out, err = run_cmd(args, timeout=120, env=sign_env)
     dt_ms = int((time.time() - t0) * 1000)
 
     if rc != 0:
@@ -595,6 +652,8 @@ def verify_ep():
     sid = str(payload.get("sessionId", "")).strip()
     if not sid:
         return jsonify({"ok": False, "error": "Falta sessionId"}), 400
+    if not valid_sid(sid):
+        return jsonify({"ok": False, "error": "sessionId inválido"}), 400
 
     try:
         meta = load_session_meta(sid)
@@ -652,30 +711,64 @@ def verify_ep():
 
     return jsonify({"ok": True, "message": "Verificación correcta", "stdout": out, "stderr": err}), 200
 
-@app.get("/download/<sid>")
-def download_ep(sid: str):
-    sid = (sid or "").strip()
+@app.post("/download")
+def download_ep():
+    """
+    Descarga del APK firmado. Exige token + MFA y que quien descarga sea quien
+    firmó (o un admin): conocer el sessionId ya no basta.
+    """
+    payload = request.get_json(force=True, silent=True) or {}
+    sid = str(payload.get("sessionId", "")).strip()
+    user_token = str(payload.get("userToken", "")).strip()
+    mfa_code = str(payload.get("mfaCode", "")).strip()
+
+    if not sid:
+        return jsonify({"ok": False, "error": "Falta sessionId"}), 400
+    if not valid_sid(sid):
+        return jsonify({"ok": False, "error": "sessionId inválido"}), 400
+    if not user_token or not mfa_code:
+        return jsonify({"ok": False, "error": "Faltan credenciales MFA"}), 400
+
+    try:
+        user = require_user(user_token, mfa_code)
+    except PermissionError as e:
+        log_event("download", ok=False, sessionId=sid, error=str(e))
+        return jsonify({"ok": False, "error": "MFA incorrecto"}), 403
+
     try:
         meta = load_session_meta(sid)
-    except Exception:
-        abort(404)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 404
 
     # según lo acordado: habilitar tras firma correcta (no hace falta verify)
     if not meta.get("signedOk"):
-        abort(403)
+        return jsonify({"ok": False, "error": "No hay APK firmado aún"}), 403
+
+    signed_by = meta.get("signedBy") or {}
+    is_admin = user.get("role") == "admin"
+    if not is_admin and str(signed_by.get("id", "")) != str(user.get("id", "")):
+        log_event(
+            "download",
+            ok=False,
+            sessionId=sid,
+            filename=meta.get("signedName", ""),
+            error="Descarga de sesión ajena",
+            userId=user.get("id", ""),
+            userName=user.get("name", ""),
+        )
+        return jsonify({"ok": False, "error": "La sesión pertenece a otro usuario"}), 403
 
     signed_path = Path(meta.get("signedPath", ""))
     if not signed_path.exists():
-        abort(404)
+        return jsonify({"ok": False, "error": "APK firmado no existe"}), 404
 
-    signed_by = meta.get("signedBy") or {}
     log_event(
         "download",
         ok=True,
         sessionId=sid,
         filename=meta.get("signedName", ""),
-        userId=signed_by.get("id", ""),
-        userName=signed_by.get("name", ""),
+        userId=user.get("id", ""),
+        userName=user.get("name", ""),
     )
     return send_file(
         signed_path,
@@ -805,36 +898,61 @@ def admin_users_delete():
     save_users(data)
     return jsonify({"ok": True}), 200
 
-@app.get("/logs/data")
+@app.post("/logs/data")
 def logs_data():
-    # Devuelve las últimas N líneas parseadas, con integridad “user-friendly”
-    limit = request.args.get("limit", "").strip()
+    """
+    Últimos N eventos con su estado de integridad. Requiere token + MFA:
+    la traza contiene nombres de artefacto, usuarios, IPs y sessionId.
+    Un admin ve todo; un usuario normal solo sus propios eventos.
+    """
+    payload = request.get_json(force=True, silent=True) or {}
+    user_token = str(payload.get("userToken", "")).strip()
+    mfa_code = str(payload.get("mfaCode", "")).strip()
+
+    if not user_token or not mfa_code:
+        return jsonify({"ok": False, "error": "Faltan credenciales MFA"}), 400
+
     try:
-        n = int(limit) if limit else 200
+        user = require_user(user_token, mfa_code)
+    except PermissionError as e:
+        return jsonify({"ok": False, "error": str(e)}), 403
+
+    try:
+        n = int(payload.get("limit") or 200)
     except Exception:
         n = 200
     n = max(1, min(n, LOG_MAX_LINES))
+
+    is_admin = user.get("role") == "admin"
+    own_id = str(user.get("id", ""))
 
     events: List[Dict[str, Any]] = []
     if LOG_FILE.exists():
         try:
             lines = LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
-            for line in lines[-n:]:
+            # Se recorre desde el final para quedarse con los N últimos eventos
+            # visibles, no con los N últimos del fichero antes de filtrar.
+            for line in reversed(lines):
+                if len(events) >= n:
+                    break
                 line = line.strip()
                 if not line:
                     continue
                 try:
                     evt = json.loads(line)
-                    integrity, okv = verify_event_mac(evt)
-                    evt["_integrity"] = integrity
-                    evt["_integrity_ok"] = okv
-                    events.append(evt)
                 except Exception:
                     continue
+                if not is_admin and str(evt.get("userId", "")) != own_id:
+                    continue
+                integrity, okv = verify_event_mac(evt)
+                evt["_integrity"] = integrity
+                evt["_integrity_ok"] = okv
+                events.append(evt)
+            events.reverse()
         except Exception:
             pass
 
-    return jsonify({"ok": True, "events": events, "count": len(events)}), 200
+    return jsonify({"ok": True, "events": events, "count": len(events), "scope": "all" if is_admin else "own"}), 200
 
 # ----------------------------
 # Main

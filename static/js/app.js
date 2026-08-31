@@ -332,6 +332,20 @@
   // ----------------------------
   // Sign / Verify / Download
   // ----------------------------
+
+  // Firmar, descargar y consultar logs exigen token + MFA. Devuelve null y
+  // avisa por UI si falta alguno.
+  function readCreds() {
+    const userToken = (tokenInput.value || "").trim();
+    const mfaCode = (mfaInput.value || "").trim();
+    if (!userToken || !mfaCode) {
+      setStatus("warn", "MFA requerido");
+      setOutput("Introduce el token de usuario y el código MFA.\n");
+      return null;
+    }
+    return { userToken, mfaCode };
+  }
+
   async function sign() {
     if (busy) return;
     if (!currentSessionId) return;
@@ -416,11 +430,53 @@
     }
   }
 
-  function downloadSigned() {
-    if (!currentSessionId) return;
-    const url = `/download/${encodeURIComponent(currentSessionId)}`;
-    dbg("DOWNLOAD", { url });
-    window.location.href = url;
+  // La descarga es un POST autenticado: el sessionId por si solo ya no da
+  // acceso al APK firmado, hacen falta token + MFA del usuario que firmo.
+  async function downloadSigned() {
+    if (!currentSessionId || busy) return;
+
+    const creds = readCreds();
+    if (!creds) return;
+
+    dbg("DOWNLOAD", { sessionId: currentSessionId });
+    setBusy(true);
+    try {
+      const res = await fetch("/download", {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: currentSessionId, ...creds }),
+      });
+
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try {
+          const j = await res.json();
+          msg = j.error || msg;
+        } catch { /* respuesta no JSON */ }
+        throw new Error(msg);
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = currentSignedName || "signed.apk";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+      setStatus("ok", "Descargado");
+      setOutput(`Descargado ${a.download}\n`, true);
+    } catch (e) {
+      dbg("DOWNLOAD error", { message: e.message });
+      setStatus("bad", "Error");
+      setOutput(`Error descargando: ${e.message}\n`, true);
+    } finally {
+      setBusy(false);
+    }
   }
 
   // ----------------------------
@@ -429,12 +485,38 @@
   function openModal(modal) { modal.classList.remove("hidden"); }
   function closeModal(modal) { modal.classList.add("hidden"); }
 
+  function logsMessage(text) {
+    logsTbody.innerHTML = "";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td colspan="7">${escapeHtml(text)}</td>`;
+    logsTbody.appendChild(tr);
+  }
+
   async function loadLogs() {
     dbg("LOGS load");
     logsTbody.innerHTML = "";
+
+    const userToken = (tokenInput.value || "").trim();
+    const mfaCode = (mfaInput.value || "").trim();
+    if (!userToken || !mfaCode) {
+      logsMessage("Introduce el token de usuario y el código MFA en la pantalla principal para ver la traza.");
+      return;
+    }
+
     try {
-      const j = await apiFetch("/logs/data?limit=200", { method: "GET" }, 20000);
-      if (!j.ok) throw new Error("No ok");
+      const j = await apiFetch("/logs/data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userToken, mfaCode, limit: 200 }),
+      }, 20000);
+      if (!j.ok) throw new Error(j.error || "No ok");
+
+      if (!(j.events || []).length) {
+        logsMessage(j.scope === "own"
+          ? "No hay eventos registrados a tu nombre."
+          : "No hay eventos registrados.");
+        return;
+      }
 
       for (const evt of (j.events || [])) {
         const tr = document.createElement("tr");

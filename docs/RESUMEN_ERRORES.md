@@ -67,3 +67,39 @@ sudo chown -R apk-signer:apk-signer /opt/apk-signer
 ```bash
 sudo -E /opt/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses
 ```
+
+## 11) El navegador avisa de "conexión no privada" / certificado no válido
+
+**Causa:** `setup.sh` generó un certificado autofirmado porque no había uno en `/etc/ssl/apk-signer/`.
+
+**Solución:** sustituye `apk-signer.crt` y `apk-signer.key` por el certificado corporativo y recarga nginx (`sudo nginx -t && sudo systemctl reload nginx`). Ver la sección "Certificado TLS" del README.
+
+## 12) `nginx -t` falla con "cannot load certificate"
+
+**Causa:** faltan `/etc/ssl/apk-signer/apk-signer.crt` o `.key`, o nginx (usuario `www-data`) no puede leer la clave.
+
+**Solución:** vuelve a ejecutar `setup.sh`, o genera el certificado a mano. Comprueba permisos:
+
+```bash
+sudo ls -l /etc/ssl/apk-signer/
+sudo chown root:www-data /etc/ssl/apk-signer/apk-signer.key
+sudo chmod 0640 /etc/ssl/apk-signer/apk-signer.key
+```
+
+## 13) Error "La sesión pertenece a otro usuario" al descargar
+
+**Causa:** la descarga está atada al usuario que firmó. Estás usando un token distinto al que se usó para firmar esa sesión.
+
+**Solución:** descarga con el token del firmante, o con un token de administrador.
+
+## 14) El modal de Logs pide token y MFA / aparece vacío
+
+**Causa:** `/logs/data` ya no es anónimo. Además, un usuario sin rol `admin` solo ve sus propios eventos.
+
+**Solución:** introduce token y código MFA en la pantalla principal antes de abrir Logs. Para ver la traza completa, usa un token de administrador.
+
+## 15) Error 405 al llamar a `GET /logs/data` o `GET /download/<sessionId>`
+
+**Causa:** ambos endpoints pasaron a ser `POST` con credenciales en el cuerpo. Los `GET` anónimos se eliminaron.
+
+**Solución:** actualiza el cliente o script a `POST /logs/data` y `POST /download` enviando `userToken` y `mfaCode`. Ver la tabla "Control de acceso" del README.

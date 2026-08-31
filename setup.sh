@@ -10,6 +10,9 @@ CMDLINE_ZIP_FALLBACK_URL="https://dl.google.com/android/repository/commandlineto
 CMDLINE_SHA256_URL="${CMDLINE_SHA256_URL:-}"
 SDKMANAGER_BIN="${SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TLS_DIR="${TLS_DIR:-/etc/ssl/apk-signer}"
+TLS_CERT="${TLS_CERT:-${TLS_DIR}/apk-signer.crt}"
+TLS_KEY="${TLS_KEY:-${TLS_DIR}/apk-signer.key}"
 
 log() {
   echo "[apk-signer] $*"
@@ -35,7 +38,7 @@ install_packages() {
   log "Instalando dependencias del sistema..."
   apt-get update
   mkdir -p /var/log/chrony
-  apt-get install -y git python3 python3-venv python3-pip openjdk-17-jre curl unzip zip jq ca-certificates rsync nginx qrencode iproute2 chrony
+  apt-get install -y git python3 python3-venv python3-pip openjdk-17-jre curl unzip zip jq ca-certificates rsync nginx qrencode iproute2 chrony openssl
 }
 
 cleanup_legacy_install() {
@@ -185,6 +188,9 @@ ensure_secrets() {
     sudo -u "${USER_NAME}" -H cp "${INSTALL_DIR}/secrets.example.json" "${INSTALL_DIR}/secrets.json"
     log "Creado ${INSTALL_DIR}/secrets.json (editar rutas/credenciales antes de arrancar)"
   fi
+  # Contiene las contrasenas del keystore: solo el usuario del servicio.
+  chown "${USER_NAME}:${USER_NAME}" "${INSTALL_DIR}/secrets.json"
+  chmod 0600 "${INSTALL_DIR}/secrets.json"
 }
 
 ensure_time_sync() {
@@ -245,6 +251,7 @@ update_secrets_paths() {
       "${INSTALL_DIR}/secrets.json" > "${tmp_file}"
     mv "${tmp_file}" "${INSTALL_DIR}/secrets.json"
     chown "${USER_NAME}:${USER_NAME}" "${INSTALL_DIR}/secrets.json"
+    chmod 0600 "${INSTALL_DIR}/secrets.json"
   fi
 }
 
@@ -257,6 +264,34 @@ install_systemd_units() {
   systemctl daemon-reload
   systemctl enable --now apk-signer.service
   systemctl enable --now apk-signer-cleanup.timer
+}
+
+ensure_tls_cert() {
+  log "Verificando certificado TLS..."
+  mkdir -p "${TLS_DIR}"
+  chmod 0750 "${TLS_DIR}"
+
+  if [[ -f "${TLS_CERT}" && -f "${TLS_KEY}" ]]; then
+    log "Certificado existente en ${TLS_CERT}. No se regenera."
+    return
+  fi
+
+  local cn="${TLS_CN:-$(hostname -f 2>/dev/null || hostname)}"
+  warn "No hay certificado en ${TLS_CERT}. Generando uno AUTOFIRMADO para CN=${cn}."
+  warn "Sustituyelo por un certificado corporativo antes de usar el servicio en produccion."
+
+  openssl req -x509 -nodes -newkey rsa:2048 \
+    -days 825 \
+    -keyout "${TLS_KEY}" \
+    -out "${TLS_CERT}" \
+    -subj "/CN=${cn}/O=APK Signer" \
+    -addext "subjectAltName=DNS:${cn},DNS:localhost,IP:127.0.0.1" \
+    >/dev/null 2>&1 || die "No se pudo generar el certificado autofirmado."
+
+  chmod 0640 "${TLS_KEY}"
+  chmod 0644 "${TLS_CERT}"
+  chown root:www-data "${TLS_KEY}" 2>/dev/null || true
+  log "Certificado autofirmado generado en ${TLS_CERT}"
 }
 
 configure_nginx() {
@@ -337,8 +372,10 @@ update_secrets_paths
 bootstrap_admin_user
 ensure_time_sync
 install_systemd_units
+ensure_tls_cert
 configure_nginx
 check_service
 post_checks
 
 log "OK. Edita ${INSTALL_DIR}/secrets.json y copia un KeyStore.jks real antes de usar el servicio."
+log "Portal disponible en https://$(hostname -f 2>/dev/null || hostname)/ (HTTP redirige a HTTPS)."

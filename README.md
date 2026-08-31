@@ -1,6 +1,6 @@
 # APK Signer Web
 
-Servicio web para inspeccionar APKs y firmarlos con un keystore local. Expone una UI estática y una API REST en `/:8001`, y publica el portal vía nginx en `http://localhost/`.
+Servicio web para inspeccionar APKs y firmarlos con un keystore local. Expone una UI estática y una API REST en `/:8001`, y publica el portal vía nginx en `https://localhost/` (el puerto 80 redirige a HTTPS).
 
 ## Estado del repositorio
 
@@ -13,7 +13,8 @@ El repositorio incluye el backend, UI, scripts y servicios systemd. Para ejecuta
 * Java 17 (JRE) para ejecutar `apksigner.jar`.
 * Android Build Tools para `aapt2` y `apksigner.jar` (instalados por `setup.sh`).
 * Un keystore real (JKS) con alias y contraseñas válidas.
-* MFA (TOTP) para firmar: se genera un usuario administrador durante la instalación.
+* MFA (TOTP) para firmar, descargar y consultar la traza: se genera un usuario administrador durante la instalación.
+* Un certificado TLS. `setup.sh` genera uno autofirmado si no existe; sustitúyelo por el corporativo.
 
 > Nota: el keystore no se incluye en el repo. Debe copiarse localmente y configurarse en `secrets.json`.
 
@@ -37,7 +38,20 @@ El repositorio incluye el backend, UI, scripts y servicios systemd. Para ejecuta
    curl -s http://localhost:8001/healthz | jq
    ```
 
-Accede a `http://localhost/admin` para gestionar usuarios y generar nuevos QR MFA (requiere token + MFA del admin).
+Accede a `https://localhost/admin` para gestionar usuarios y generar nuevos QR MFA (requiere token + MFA del admin).
+
+### Certificado TLS
+
+El portal solo se sirve por HTTPS: el token de usuario y el código MFA no deben viajar en claro. `setup.sh` genera un certificado **autofirmado** en `/etc/ssl/apk-signer/` si no encuentra uno, lo que provocará un aviso del navegador. Para usar un certificado corporativo, sustituye los dos ficheros y recarga nginx:
+
+```bash
+sudo cp tu-certificado.crt /etc/ssl/apk-signer/apk-signer.crt
+sudo cp tu-clave.key /etc/ssl/apk-signer/apk-signer.key
+sudo chmod 0640 /etc/ssl/apk-signer/apk-signer.key
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Puedes cambiar las rutas con las variables `TLS_CERT` y `TLS_KEY` al ejecutar `setup.sh`.
 
 ## Comprobaciones básicas de funcionamiento
 
@@ -49,7 +63,8 @@ sudo systemctl status nginx --no-pager
 sudo journalctl -u apk-signer.service -n 200 --no-pager
 ss -tulpn | grep 8001
 curl -s http://localhost:8001/healthz | jq
-curl -I http://localhost/
+curl -I http://localhost/          # debe responder 301 hacia https://
+curl -kI https://localhost/        # -k por el certificado autofirmado
 ```
 
 Si `/healthz` no responde, revisa permisos de `/opt/apk-signer`, la existencia de `secrets.json` y de `users.json`, y que el servicio `apk-signer` esté activo.
@@ -58,7 +73,22 @@ Si necesitas diagnosticar por tu cuenta, revisa estado, logs y el listener del p
 
 Si faltan `secrets.json` o el `KeyStore.jks`, el portal mostrará una advertencia y la firma quedará deshabilitada hasta completar esos pasos.
 
-Si ves errores 413 al subir APKs, revisa el límite `client_max_body_size` en la configuración de nginx.
+Si ves errores 413 al subir APKs, revisa el límite `client_max_body_size` en la configuración de nginx (100m, alineado con `MAX_CONTENT_LENGTH` de `secrets.json`).
+
+## Control de acceso
+
+Todos los endpoints que exponen artefactos o trazas exigen token de usuario + código MFA en el cuerpo de la petición:
+
+| Endpoint | Método | Requiere | Notas |
+|---|---|---|---|
+| `/inspect` | POST | — | Sube e inspecciona el APK |
+| `/sign` | POST | token + MFA | |
+| `/verify` | POST | — | Solo sobre una sesión ya firmada |
+| `/download` | POST | token + MFA | Solo quien firmó la sesión, o un admin |
+| `/logs/data` | POST | token + MFA | Un admin ve toda la traza; un usuario, solo sus eventos |
+| `/api/admin/*` | POST | token + MFA de admin | |
+
+> Cambio respecto a versiones anteriores: `GET /download/<sessionId>` y `GET /logs/data` ya no existen. Conocer un `sessionId` ya no basta para descargar un APK firmado.
 
 Para más detalles y solución de errores, revisa `docs/INSTALACION.md` y `docs/RESUMEN_ERRORES.md`.
 
