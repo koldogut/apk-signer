@@ -189,7 +189,7 @@ Si la cadena se rompe justo en el primer evento y este es `log-rotated`, no es u
 
 ## 23) El resumen dice `hasKey: false`
 
-**Causa:** no hay `LOG_HMAC_KEY` en `secrets.json`, así que los eventos no llevan MAC.
+**Causa:** falta `LOG_HMAC_KEY` en `secrets.json`, así que los eventos se registran sin MAC.
 
 **Solución:** genera una clave y reinicia el servicio. Los eventos ya escritos no se pueden sellar retroactivamente:
 
@@ -214,8 +214,6 @@ Los tests montan su propia configuración en un directorio temporal vía `CREDEN
 
 **Causa:** el Python del sistema es anterior. Debian 11 trae 3.9 y Ubuntu 22.04 trae 3.10.
 
-**Motivo del mínimo:** por debajo de 3.11 no hay versión de `pillow` sin vulnerabilidades conocidas —los parches exigen 3.10+— ni de `click`. `pillow` entra por `qrcode[pil]`, que solo genera el PNG del QR de MFA, así que el riesgo real es bajo, pero `pip-audit` no puede quedar en verde.
-
 **Solución:** instala un Python 3.11 aparte y ejecuta el instalador con él por delante en el `PATH`:
 
 ```bash
@@ -228,7 +226,7 @@ Comprueba qué versión se está usando con `python3 --version` antes de lanzar 
 
 ## 26) La firma avisa de "error while loading shared libraries: libc++.so"
 
-**Causa:** una instalación anterior copiaba `zipalign` a `/opt/apk-signer/tools/`. Ese binario enlaza dinámicamente contra `lib64/libc++.so`, que vive dentro del directorio de Build Tools, así que fuera de ahí no arranca. `aapt2` no da el problema porque va enlazado estáticamente.
+**Causa:** `ZIPALIGN` apunta a una copia del binario fuera del SDK. `zipalign` necesita las librerías de su propio directorio de Build Tools y fuera de ahí no arranca.
 
 **Efecto:** la firma continuaba, pero **sin alinear el APK** y avisando en la respuesta y en la traza.
 
@@ -269,7 +267,7 @@ Sospechosos habituales: una dependencia nueva que no instaló bien, `secrets.jso
 
 ## 29) `git pull` falla con "Los cambios locales serán sobrescritos" en `systemd/apk-signer-cleanup.timer`
 
-**Causa:** ese fichero se quedó con CRLF en el repositorio mientras `.gitattributes` declara `*.timer text eol=lf`. Git lo convertía al hacer checkout y quedaba marcado como modificado sin que nadie lo tocara. Corregido, pero un clon hecho **antes** del arreglo arrastra el problema una vez.
+**Causa:** un clon anterior al arreglo de fines de línea arrastra ese fichero marcado como modificado.
 
 **Solución:** en el clon afectado, descarta el estado local y alinéalo con el remoto:
 
@@ -285,7 +283,7 @@ Los clones nuevos ya no lo sufren.
 
 ## 30) La firma avisa de "zipalign solo admite alineado a 4 KB"
 
-**Causa:** `zipalign` de Android Build Tools 34 no admite `-P <pagesize_kb>`; su `-p` alinea únicamente a 4 KB. Android 15+ exige **16 KB** en dispositivos con páginas de ese tamaño, y Google Play lo requiere para apps que apunten a Android 15+.
+**Causa:** `zipalign` de Build Tools 34 no admite `-P <pagesize_kb>` y solo alinea a 4 KB. Android 15+ exige 16 KB.
 
 **Efecto:** el APK se firma y es válido, pero sus librerías nativas sin comprimir quedan alineadas a 4 KB. En un dispositivo con páginas de 16 KB, las `.so` no se pueden mapear directamente.
 
@@ -300,4 +298,4 @@ Comprueba después `zipalign_page_kb` en `/healthz` (debe ser 16) y que una firm
 
 Para volver al comportamiento antiguo, pon `ZIPALIGN_PAGE_KB: 4` en `secrets.json` (o `0` para usar el `-p` clásico).
 
-> `-P` y `-p` son excluyentes: `zipalign` rechaza que se pasen juntos. El servicio elige uno u otro según lo que soporte el binario instalado.
+> El servicio elige los argumentos según lo que soporte el binario instalado.

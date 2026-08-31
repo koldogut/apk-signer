@@ -1,71 +1,78 @@
 # APK Signer Web
 
-Servicio web para inspeccionar APKs y firmarlos con un keystore local. Expone una UI estática y una API REST en `/:8001`, y publica el portal vía nginx en `https://localhost/` (el puerto 80 redirige a HTTPS).
+Servicio web para inspeccionar APKs y firmarlos con un keystore local. Expone una UI estática y una API REST en el puerto 8001, y publica el portal vía nginx en `https://localhost/`. El puerto 80 redirige a HTTPS.
 
-## Estado del repositorio
+## Contenido del repositorio
 
-El repositorio incluye el backend, la UI, los scripts de despliegue y las unidades de systemd.
+| Componente | Descripción |
+|---|---|
+| `setup.sh` | Instalación desde cero: dependencias, Android Build Tools, TLS, usuario administrador y servicios |
+| `update.sh` | Actualización de una instalación existente, con copia de seguridad y reversión automática |
+| `app.py`, `config.py`, `audit.py`, `auth.py`, `signing.py` | Aplicación Flask |
+| `static/` | Portal web y panel de administración |
+| `systemd/`, `nginx/` | Unidades de servicio y configuración del proxy |
+| `tools/` | Alta del administrador inicial y mantenimiento periódico |
+| `tests/` | Suite de pruebas (100 casos) |
 
-* `setup.sh` instala desde cero: dependencias del sistema, Android Build Tools (`aapt2`, `apksigner.jar`, `zipalign`), certificado TLS, usuario administrador MFA y servicios.
-* `update.sh` actualiza una instalación existente conservando la configuración y los datos, con copia de seguridad y reversión automática.
-* Lo único que hay que aportar es un **keystore JKS real**: no se incluye en el repo y debe copiarse a mano.
-
-El código está separado en `config` / `audit` / `auth` / `signing` / `app`, con 100 tests y CI que cubre tests, `ruff`, `bandit`, `pip-audit` y la validación de la configuración de nginx.
+El keystore no se incluye: hay que aportarlo.
 
 ## Requisitos
 
-* Debian 12+ / Ubuntu 24.04+ (por la versión de Python del sistema).
-* Python 3.11+ (con `venv`) y `pip`.
-* Java 17 (JRE) para ejecutar `apksigner.jar`.
-* Android Build Tools para `aapt2` y `apksigner.jar` (instalados por `setup.sh`).
-* Un keystore real (JKS) con alias y contraseñas válidas.
-* MFA (TOTP) para firmar, descargar y consultar la traza: se genera un usuario administrador durante la instalación.
-* Un certificado TLS. `setup.sh` genera uno autofirmado si no existe; sustitúyelo por el corporativo.
+* Debian 12+ / Ubuntu 24.04+.
+* Python 3.11 o superior, con `venv` y `pip`.
+* Java (JRE) para ejecutar `apksigner.jar`.
+* Android Build Tools 35 o superior. Los instala `setup.sh`.
+* Un keystore JKS con su alias y contraseñas.
+* Un certificado TLS. `setup.sh` genera uno autofirmado si no hay ninguno.
 
-> Nota: el keystore no se incluye en el repo. Debe copiarse localmente y configurarse en `secrets.json`.
+Sobre Debian 11 o Ubuntu 22.04, instala un Python 3.11 aparte y ejecuta el instalador con él en el `PATH`:
 
-> **Por qué 3.11 y no 3.9.** En Python 3.9 no existe una versión de `pillow` sin vulnerabilidades conocidas: los parches (12.1.1 en adelante) requieren 3.10+, y lo mismo pasa con `click` 8.3.3. `pillow` entra como dependencia de `qrcode[pil]`, que solo se usa para generar el PNG del QR de MFA a partir de una URI que construye el propio servicio, así que la exposición real es baja —no se parsea ninguna imagen ajena—, pero un `pip-audit` sobre un despliegue en 3.9 sale en rojo y no hay forma de arreglarlo sin subir de versión. 3.11 es además la versión del `Dockerfile`.
->
-> Si necesitas desplegar sobre Debian 11 o Ubuntu 22.04, instala un Python 3.11 aparte (por ejemplo con `deadsnakes`) y apunta el `venv` a él en lugar de usar el del sistema.
+```bash
+sudo add-apt-repository ppa:deadsnakes/ppa
+sudo apt-get update && sudo apt-get install -y python3.11 python3.11-venv
+```
 
-## Instalación rápida (modo sistema con systemd)
+## Instalación
 
-1. Clona el repo y ejecuta el instalador (como root). El script usa el código del clon local, no requiere URL adicional:
+```bash
+git clone https://github.com/koldogut/apk-signer.git
+cd apk-signer
+sudo bash setup.sh
+```
 
-   ```bash
-   git clone https://github.com/koldogut/apk-signer.git
-   cd apk-signer
-   sudo bash setup.sh
-   ```
+Durante la instalación se abre el aceptador de licencias del SDK: confirma con `y`.
 
-2. Durante la instalación se abrirá el aceptador de licencias de `sdkmanager` (confirma con `y` cuando se solicite).
-3. El instalador generará un usuario administrador MFA y mostrará el token + QR para Google Authenticator.
-4. Edita `/opt/apk-signer/secrets.json` con alias y contraseñas reales.
-5. Copia tu `KeyStore.jks` a `/opt/apk-signer/keystore/KeyStore.jks`.
-6. Verifica estado:
+Al terminar:
 
-   ```bash
-   curl -s http://localhost:8001/healthz | jq
-   ```
+1. **Guarda el token y el QR del administrador** que imprime el instalador. No se pueden recuperar después.
+2. Edita `/opt/apk-signer/secrets.json` con el alias y las contraseñas del keystore.
+3. Copia tu keystore a `/opt/apk-signer/keystore/KeyStore.jks`.
+4. Reinicia y comprueba:
 
-Accede a `https://localhost/admin` para gestionar usuarios y generar nuevos QR MFA (requiere token + MFA del admin).
+```bash
+sudo systemctl restart apk-signer
+curl -s http://localhost:8001/healthz | jq .checks
+```
+
+El portal queda en `https://localhost/` y la gestión de usuarios en `https://localhost/admin`.
+
+Para instalación paso a paso, consulta [docs/INSTALACION.md](docs/INSTALACION.md). Para despliegue con contenedores, [docs/DOCKER.md](docs/DOCKER.md).
 
 ### Certificado TLS
 
-El portal solo se sirve por HTTPS: el token de usuario y el código MFA no deben viajar en claro. `setup.sh` genera un certificado **autofirmado** en `/etc/ssl/apk-signer/` si no encuentra uno, lo que provocará un aviso del navegador. Para usar un certificado corporativo, sustituye los dos ficheros y recarga nginx:
+`setup.sh` genera un certificado autofirmado en `/etc/ssl/apk-signer/`, que provoca un aviso del navegador. Para poner el corporativo:
 
 ```bash
 sudo cp tu-certificado.crt /etc/ssl/apk-signer/apk-signer.crt
 sudo cp tu-clave.key /etc/ssl/apk-signer/apk-signer.key
+sudo chown root:www-data /etc/ssl/apk-signer/apk-signer.key
 sudo chmod 0640 /etc/ssl/apk-signer/apk-signer.key
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-Puedes cambiar las rutas con las variables `TLS_CERT` y `TLS_KEY` al ejecutar `setup.sh`.
+Las rutas se pueden cambiar con `TLS_CERT` y `TLS_KEY` al ejecutar `setup.sh`.
 
-## Actualización de una instalación existente
-
-`setup.sh` instala desde cero. Para actualizar una instalación que ya está en marcha, usa `update.sh`:
+## Actualización
 
 ```bash
 cd apk-signer
@@ -73,25 +80,21 @@ git pull
 sudo bash update.sh
 ```
 
-Qué hace, y qué no:
+`update.sh` actualiza el código, las dependencias Python, las unidades de systemd y la configuración de nginx. Conserva `secrets.json`, `users.json`, el keystore, la traza y las sesiones de trabajo, y añade a `secrets.json` las claves nuevas que aparezcan en `secrets.example.json` sin tocar los valores existentes.
 
-* **Actualiza** el código, las dependencias Python (`pip install -U -r requirements.txt`), las unidades de systemd y la configuración de nginx.
-* **Conserva** `secrets.json`, `users.json`, el keystore, la traza de auditoría y las sesiones de trabajo.
-* **Añade a `secrets.json` las claves nuevas** que aparezcan en `secrets.example.json`, sin tocar los valores que ya tengas configurados. Es lo que permite que una instalación antigua reciba opciones nuevas.
-* **No** instala paquetes del sistema ni el SDK de Android: da por hecho que ya están. Si cambia `BUILD_TOOLS_VERSION`, vuelve a ejecutar `setup.sh`.
-* **Hace copia de seguridad antes de tocar nada** en `/var/backups/apk-signer/` (configuración, usuarios, keystore y traza; se excluyen las sesiones de trabajo por tamaño). Conserva las 5 últimas, ajustable con `KEEP_BACKUPS`.
-* **Revierte automáticamente** si el servicio no vuelve a responder en `/healthz` tras el reinicio, y muestra los registros del fallo.
+Antes de modificar nada hace una copia en `/var/backups/apk-signer/`. Si el servicio no responde en `/healthz` tras reiniciar, restaura esa copia y vuelve a arrancar la versión anterior.
 
-Variables útiles:
+No instala paquetes del sistema ni el SDK de Android.
 
-```bash
-sudo KEEP_BACKUPS=10 bash update.sh   # conservar más copias
-sudo SKIP_DEPS=1 bash update.sh       # solo código, sin tocar dependencias
-```
+| Variable | Efecto |
+|---|---|
+| `KEEP_BACKUPS=10` | Número de copias que se conservan (5 por defecto) |
+| `SKIP_DEPS=1` | No toca las dependencias Python |
+| `INSTALL_BUILD_TOOLS=1` | Instala la versión de Build Tools configurada si falta |
 
-La versión instalada se guarda en `/opt/apk-signer/.version` y `update.sh` la muestra al empezar, junto con la del clon.
+La versión instalada queda en `/opt/apk-signer/.version`.
 
-### Restaurar una copia a mano
+### Restaurar una copia
 
 ```bash
 sudo systemctl stop apk-signer
@@ -100,45 +103,39 @@ sudo chown -R apk-signer:apk-signer /opt/apk-signer
 sudo systemctl start apk-signer
 ```
 
-## Comprobaciones básicas de funcionamiento
-
-Ejecuta estos comandos para confirmar que el servicio web está levantado y sirviendo la UI:
+## Comprobación del servicio
 
 ```bash
-sudo systemctl status apk-signer.service --no-pager
-sudo systemctl status nginx --no-pager
+sudo systemctl status apk-signer.service nginx --no-pager
 sudo journalctl -u apk-signer.service -n 200 --no-pager
-ss -tulpn | grep 8001
-curl -s http://localhost:8001/healthz | jq
-curl -I http://localhost/          # debe responder 301 hacia https://
-curl -kI https://localhost/        # -k por el certificado autofirmado
+curl -s http://localhost:8001/healthz | jq .checks
+curl -I http://localhost/          # 301 hacia https://
+curl -kI https://localhost/        # 200
 ```
 
-Si `/healthz` no responde, revisa permisos de `/opt/apk-signer`, la existencia de `secrets.json` y de `users.json`, y que el servicio `apk-signer` esté activo.
+Todas las comprobaciones de `/healthz` deben dar `true`, y `zipalign_page_kb` debe valer 16.
 
-Si necesitas diagnosticar por tu cuenta, revisa estado, logs y el listener del puerto antes de reintentar la instalación.
+Si faltan `secrets.json` o el keystore, el portal muestra una advertencia y la firma queda deshabilitada.
 
-Si faltan `secrets.json` o el `KeyStore.jks`, el portal mostrará una advertencia y la firma quedará deshabilitada hasta completar esos pasos.
-
-Si ves errores 413 al subir APKs, revisa el límite `client_max_body_size` en la configuración de nginx (100m, alineado con `MAX_CONTENT_LENGTH` de `secrets.json`).
+Ante un error 413 al subir un APK, revisa `client_max_body_size` en nginx (100m) y `MAX_CONTENT_LENGTH` en `secrets.json`.
 
 ## Control de acceso
 
-El token de usuario y el código MFA **se canjean una sola vez** por una sesión corta (15 min por defecto). Esa sesión es la que autoriza el resto de operaciones, y viaja en la cabecera `Authorization: Bearer <authToken>` o en el campo `authToken` del cuerpo.
+El token de usuario y el código MFA se canjean una vez por una sesión de 15 minutos. Esa sesión autoriza el resto de operaciones y viaja en la cabecera `Authorization: Bearer <authToken>` o en el campo `authToken` del cuerpo.
 
-| Endpoint | Método | Requiere | Notas |
-|---|---|---|---|
-| `/api/auth/login` | POST | token + MFA | Devuelve `authToken` y `expiresAt` |
-| `/api/auth/logout` | POST | `authToken` | Invalida la sesión |
-| `/inspect` | POST | — | Sube e inspecciona el APK |
-| `/sign` | POST | sesión | Alinea con `zipalign` y firma |
-| `/verify` | POST | — | Solo sobre una sesión ya firmada |
-| `/download` | POST | sesión | Solo quien firmó la sesión, o un admin |
-| `/logs/data` | POST | sesión | Un admin ve toda la traza; un usuario, solo sus eventos |
-| `/logs/verify` | POST | sesión con rol `admin` | Verifica MAC y encadenado de la traza completa |
-| `/api/admin/*` | POST | sesión con rol `admin` | |
+| Endpoint | Método | Requiere |
+|---|---|---|
+| `/api/auth/login` | POST | token + MFA |
+| `/api/auth/logout` | POST | `authToken` |
+| `/inspect` | POST | — |
+| `/sign` | POST | sesión |
+| `/verify` | POST | — |
+| `/download` | POST | sesión del firmante, o de un admin |
+| `/logs/data` | POST | sesión |
+| `/logs/verify` | POST | sesión de admin |
+| `/api/admin/*` | POST | sesión de admin |
 
-Ejemplo desde consola:
+Ejemplo:
 
 ```bash
 AUTH=$(curl -sk https://localhost/api/auth/login \
@@ -150,54 +147,41 @@ curl -sk https://localhost/logs/data \
   -H 'Content-Type: application/json' -d '{"limit":50}' | jq
 ```
 
-### Defensas frente a fuerza bruta
+En el modal de Logs, un administrador ve la traza completa y un usuario normal solo sus propios eventos.
 
-* **Anti-replay**: cada código TOTP se canjea una única vez. El contador consumido se guarda por usuario, así que un código capturado no sirve para abrir una segunda sesión.
-* **Bloqueo por intentos**: tras `MAX_AUTH_FAILURES` (5) intentos fallidos, el usuario queda bloqueado `AUTH_LOCKOUT_MINUTES` (15) minutos, incluso si después acierta. Los tokens desconocidos se contabilizan por IP.
-* **Rate limiting en nginx**: `/api/auth/login` limitado a 12 peticiones/minuto por IP, `/inspect` a 20/minuto y 3 conexiones simultáneas, el resto a 10/segundo. Devuelve `429`.
+### Límites de intentos
 
-El estado (sesiones, contadores y bloqueos) vive en `AUTH_STATE_PATH` con bloqueo exclusivo de fichero, para que sea coherente entre los varios workers de gunicorn.
+| Control | Valor por defecto | Ajuste |
+|---|---|---|
+| Reutilización de un código TOTP | Rechazada | — |
+| Intentos fallidos antes de bloquear | 5 | `MAX_AUTH_FAILURES` |
+| Duración del bloqueo | 15 min | `AUTH_LOCKOUT_MINUTES` |
+| Duración de la sesión | 15 min | `AUTH_TTL_MINUTES` |
+| Peticiones a `/api/auth/login` | 12/min por IP | `nginx/apk-signer.conf` |
+| Peticiones a `/inspect` | 20/min y 3 conexiones por IP | `nginx/apk-signer.conf` |
 
-> Cambios respecto a versiones anteriores: `GET /download/<sessionId>` y `GET /logs/data` ya no existen, y `/sign`, `/download`, `/logs/data` y `/api/admin/*` ya no aceptan `userToken`/`mfaCode`/`adminToken`/`adminCode`: usan la sesión.
+El estado se guarda en `AUTH_STATE_PATH`, compartido entre los workers de gunicorn.
 
 ## Alineado de los APK
 
-Antes de firmar, el servicio ejecuta `zipalign -p -f 4` sobre el APK subido. Es obligatorio hacerlo **antes** de firmar: alinear después invalidaría la firma. `setup.sh` y el `Dockerfile` instalan `zipalign` junto a `aapt2` y `apksigner.jar`.
+Antes de firmar se ejecuta `zipalign` sobre el APK. Si no está configurado o falla, la firma continúa y la respuesta incluye `"aligned": false` con un `warning`, que también queda en la traza.
 
-Si `zipalign` no está configurado o falla, la firma continúa pero la respuesta incluye `"aligned": false` y un `warning`, y queda registrado en la traza. Comprueba `zipalign_exists` en `/healthz`.
+Las librerías nativas sin comprimir se alinean al tamaño de página de `ZIPALIGN_PAGE_KB` (16 KB por defecto), lo que requiere Build Tools 35 o superior. Con una versión anterior el servicio alinea a 4 KB y lo indica en el `warning` de cada firma.
 
-### Tamaño de página
-
-Las librerías nativas sin comprimir (`extractNativeLibs="false"`) deben quedar alineadas al tamaño de página del dispositivo. Android 15+ exige **16 KB**, y el `-p` clásico de `zipalign` solo alinea a 4 KB.
-
-El servicio usa `-P 16` por defecto (`ZIPALIGN_PAGE_KB` en `secrets.json`), que requiere **Build Tools 35 o superior**. Si el `zipalign` instalado no admite `-P` —el de Build Tools 34 no—, degrada a 4 KB, lo dice en el `warning` de la firma y lo refleja en `alignPageKb`.
-
-| | Build Tools 34 | Build Tools 35+ |
-|---|---|---|
-| Argumentos | `-p -f 4` | `-P 16 -f 4` |
-| Alineado de las `.so` | 4 KB | 16 KB |
-| Android 15+ | insuficiente | correcto |
-
-`/healthz` informa del valor efectivo en `zipalign_page_kb`.
-
-**Librerías comprimidas.** El alineado solo aplica a las `.so` almacenadas sin comprimir. Con `extractNativeLibs="true"` van deflatadas dentro del APK, no se pueden mapear en memoria y `zipalign` las marca `OK - compressed`: se saltan a propósito. En un APK mixto, cada librería recibe el trato que corresponde a su método. Que una `.so` comprimida aparezca en un offset no alineado es lo esperado, no un fallo.
-
-| `.so` en el APK | Qué hace el servicio |
+| `.so` en el APK | Tratamiento |
 |---|---|
-| Sin comprimir (`Stored`) | Alinea a `ZIPALIGN_PAGE_KB` |
-| Comprimida (`Deflated`) | La deja como está (exenta) |
-| Mixto | Cada una según su método |
+| Sin comprimir (`Stored`) | Se alinea a `ZIPALIGN_PAGE_KB` |
+| Comprimida (`Deflated`) | Se deja como está |
+
+Una `.so` comprimida en un offset no alineado es el comportamiento esperado.
+
+`/healthz` informa del valor efectivo en `zipalign_page_kb`, y cada firma en `alignPageKb`.
 
 ## Traza de auditoría
 
-Cada evento se registra en `logs/app.jsonl` con:
+Cada evento se registra en `logs/app.jsonl` con un MAC (HMAC-SHA256 con `LOG_HMAC_KEY`), un número de orden `seq` y el hash del evento anterior en `prev`.
 
-* un **MAC** (HMAC-SHA256 con `LOG_HMAC_KEY`), que detecta la modificación de esa línea;
-* un **encadenado**: `seq` correlativo y `prev` con el hash del evento anterior.
-
-La diferencia importa. Un MAC por línea no ve que se hayan **borrado** eventos: las líneas que quedan siguen siendo válidas una por una. El encadenado sí, porque el `prev` del siguiente deja de cuadrar.
-
-Un administrador puede recorrer la traza entera desde el botón "Verificar cadena" del modal de Logs, o por API:
+Un administrador puede verificar la traza completa desde el botón "Verificar cadena" del modal de Logs, o por API:
 
 ```bash
 curl -sk https://localhost/logs/verify \
@@ -205,62 +189,71 @@ curl -sk https://localhost/logs/verify \
   -H 'Content-Type: application/json' -d '{}' | jq .summary
 ```
 
-La rotación (`cleanup.py`, cada hora si el fichero pasa de 10 MB) deja en el fichero nuevo un evento `log-rotated` que enlaza con el hash del último evento del fichero rotado, para que la cadena no se parta al rotar.
+La verificación devuelve `ok: false` si detecta eventos modificados, huecos en la numeración, líneas ilegibles o ausencia de `LOG_HMAC_KEY`.
 
-> Límite: la cadena detecta manipulación, pero no la impide, y quien controle la máquina puede borrar la traza entera y el fichero rotado. Para tamper-evidence real, configura `SYSLOG_ADDRESS` (`"host:514"` o `"/dev/log"`) y envía la traza a un syslog o SIEM fuera de la máquina.
+`cleanup.py` rota el fichero cada hora si supera los 10 MB y deja en el nuevo un evento `log-rotated` enlazado con el anterior.
+
+Para conservar la traza fuera de la máquina, configura `SYSLOG_ADDRESS` (`"host:514"` o `"/dev/log"`).
 
 ## Aislamiento del servicio
 
-La unit de systemd corre con `ProtectSystem=strict`, `PrivateTmp`, `NoNewPrivileges` y `SystemCallFilter=@system-service`, con `/opt/apk-signer` como único árbol escribible.
+La unidad de systemd corre con `ProtectSystem=strict`, `PrivateTmp`, `NoNewPrivileges` y `SystemCallFilter=@system-service`, con `/opt/apk-signer` como único árbol escribible.
 
-Dos avisos si tocas ese fichero:
+**No añadas `MemoryDenyWriteExecute=true`**: impide el JIT de la JVM y el servicio deja de arrancar.
 
-* `MemoryDenyWriteExecute` **no** está activado a propósito: la JVM que ejecuta `apksigner` necesita páginas W+X para el JIT y el servicio no arrancaría.
-* `SystemCallFilter` es el candado más restrictivo. Si `apksigner` empieza a fallar tras actualizar Java, es lo primero que hay que comentar.
+Si `apksigner` falla tras actualizar Java, comenta `SystemCallFilter` como primera prueba.
 
-Para sacar las contraseñas del árbol de la aplicación, deja el fichero en `/etc/apk-signer/secrets.json` (`root:root`, `0600`) y descomenta la línea `LoadCredential=` de la unit. La aplicación lo detecta por `$CREDENTIALS_DIRECTORY` sin ningún otro cambio.
+Para sacar las contraseñas del árbol de la aplicación, deja el fichero en `/etc/apk-signer/secrets.json` (`root:root`, `0600`) y descomenta la línea `LoadCredential=` de la unidad.
 
-Para más detalles y solución de errores, revisa `docs/INSTALACION.md` y `docs/RESUMEN_ERRORES.md`.
+## Configuración
+
+Todas las opciones viven en `secrets.json`. `secrets.example.json` tiene la plantilla completa.
+
+| Clave | Descripción |
+|---|---|
+| `AAPT`, `APKSIGNER_JAR`, `ZIPALIGN` | Rutas de las herramientas del SDK |
+| `ZIPALIGN_PAGE_KB` | Tamaño de página del alineado (16) |
+| `KEYSTORE_PATH`, `KEY_ALIAS`, `KS_PASS`, `KEY_PASS` | Keystore y credenciales |
+| `WORK_DIR`, `LOG_DIR`, `USERS_PATH`, `AUTH_STATE_PATH` | Rutas de datos |
+| `MAX_CONTENT_LENGTH` | Tamaño máximo del APK subido |
+| `SESSION_TTL_HOURS` | Caducidad de las sesiones de trabajo |
+| `AUTH_TTL_MINUTES`, `MAX_AUTH_FAILURES`, `AUTH_LOCKOUT_MINUTES` | Sesión y bloqueo |
+| `TRUSTED_PROXIES` | Número de proxies delante de la aplicación (1 con nginx) |
+| `LOG_MAX_LINES`, `LOG_HMAC_KEY`, `SYSLOG_ADDRESS` | Traza de auditoría |
 
 ## Desarrollo
-
-El código está separado por responsabilidad, con las dependencias en una sola dirección (`config` → `audit` → `auth` → `signing` → `app`):
-
-| Módulo | Contenido |
-|---|---|
-| `config.py` | Carga de secretos, rutas y constantes |
-| `audit.py` | Traza encadenada, MAC y verificación |
-| `auth.py` | TOTP, anti-replay, sesiones y bloqueo |
-| `signing.py` | Inspección con `aapt2`, alineado y firma |
-| `app.py` | Aplicación Flask y rutas |
-
-`app:app` sigue siendo el punto de entrada, así que la unit de systemd y el `Dockerfile` no cambian.
-
-### Tests
 
 ```bash
 pip install -r requirements-dev.txt
 pytest
 ```
 
-Las herramientas externas (`java`/`apksigner`, `aapt2`, `zipalign`) se sustituyen por scripts en `tests/fakebin/` que se anteponen al `PATH`. Los tests recorren así el mismo código de `subprocess` que producción —incluido el paso de contraseñas por entorno— sin necesitar el Android SDK. La configuración de prueba se inyecta con `CREDENTIALS_DIRECTORY`, el mismo mecanismo que usa systemd con `LoadCredential=`.
+Los tests sustituyen `java`, `aapt2` y `zipalign` por los scripts de `tests/fakebin/`, así que no necesitan el SDK de Android. La configuración de prueba se inyecta con `CREDENTIALS_DIRECTORY` y no toca el `secrets.json` de la máquina.
 
-> No hay cobertura de integración contra Build Tools reales: haría falta el SDK de Android, que no está disponible en CI. Lo que se valida es el contrato con esas herramientas (orden de invocación, argumentos y entorno), no su comportamiento interno.
+Servidor de desarrollo, sin nginx ni TLS delante:
 
-### Comprobaciones automáticas
+```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt
+python app.py                                  # 127.0.0.1:8001
+APK_SIGNER_DEV_HOST=0.0.0.0 python app.py      # accesible desde la red
+```
 
-`.github/workflows/ci.yml` ejecuta en cada push y PR:
+### Integración continua
 
-* `pytest` en Python 3.11 y 3.12 (el mínimo soportado y el siguiente);
-* `ruff` sobre todo el repo y `bash -n setup.sh`;
-* `bandit` y `pip-audit` sobre las dependencias de producción, **en la versión mínima soportada**: la resolución de dependencias depende de la versión de Python, y auditar solo en la más nueva ocultaría vulnerabilidades que sí afectan al mínimo declarado;
-* `nginx -t` sobre `nginx/apk-signer.conf`, con un certificado de usar y tirar.
+`.github/workflows/ci.yml` ejecuta en cada push y pull request:
 
-Dependabot vigila `pip`, las GitHub Actions y la imagen base del `Dockerfile`.
+* `pytest` en Python 3.11, 3.12 y 3.14
+* `ruff` y `bash -n setup.sh`
+* `bandit` y `pip-audit` sobre las dependencias de producción
+* Construcción de la imagen de Docker y comprobación del utillaje dentro del contenedor
+* `nginx -t` sobre `nginx/apk-signer.conf`
 
-## Capturas de la aplicación
+## Solución de problemas
 
-A continuación se muestran capturas representativas del flujo completo de instalación, firma y gestión de usuarios:
+[docs/RESUMEN_ERRORES.md](docs/RESUMEN_ERRORES.md) recoge 30 problemas conocidos con su causa y su remedio.
+
+## Capturas
 
 1. **Setup inicial con MFA**: token de administrador y QR generado durante `setup.sh`.
 
@@ -273,54 +266,3 @@ A continuación se muestran capturas representativas del flujo completo de insta
 3. **Gestión de usuarios**: creación de un usuario nuevo desde el panel administrativo.
 
    ![Creación de usuario nuevo](png/user-man.png)
-
-## Ejecución en Docker (con volúmenes persistentes)
-
-1. Construye la imagen:
-
-   ```bash
-   docker compose build
-   ```
-
-2. Crea las carpetas locales que se persistirán en el host:
-
-   ```bash
-   mkdir -p keystore work logs
-   ```
-
-3. Copia el ejemplo de secretos y edítalo:
-
-   ```bash
-   cp secrets.example.json secrets.json
-   ```
-
-   Ajusta rutas en `secrets.json` para apuntar a `/opt/apk-signer/...` (ya vienen así en el ejemplo).
-
-4. Deposita tu `KeyStore.jks` en `./keystore/KeyStore.jks` y completa alias + contraseñas reales en `secrets.json`.
-
-5. **Genera la clave de sellado de la traza.** A diferencia de `setup.sh`, el flujo de Docker no la crea por ti, y sin ella los eventos se registran sin MAC:
-
-   ```bash
-   python3 -c "import os; print(os.urandom(32).hex())"
-   # copiar el valor a LOG_HMAC_KEY en secrets.json
-   ```
-
-6. Genera `users.json` si aún no existe:
-
-   ```bash
-   python3 tools/bootstrap_users.py
-   ```
-
-7. Levanta el servicio:
-
-   ```bash
-   docker compose up
-   ```
-
-El `Dockerfile` instala el SDK de Android y los Build Tools 35 dentro de la imagen. `aapt2` y `apksigner.jar` se copian a `/opt/apk-signer/tools/`; **`zipalign` se queda dentro del SDK** porque enlaza contra `lib64/libc++.so` y fuera de ahí no arranca, así que `ZIPALIGN` apunta a `/opt/android-sdk/build-tools/35.0.0/zipalign` (ya viene así en el ejemplo). Si montas un SDK del host en `/opt/android-sdk`, ajusta esa ruta a la versión que tengas.
-
-> **El despliegue con Docker no lleva TLS.** `docker-compose.yml` publica el 8001 en claro, sin nginx delante. El token y el código MFA viajarían sin cifrar: para cualquier uso más allá de pruebas, pon un proxy inverso con TLS delante o usa el despliegue con systemd, que sí lo configura.
-
-El `docker-compose.yml` monta `./keystore` y `./secrets.json` para que el usuario pueda gestionar el keystore y los secretos desde el host. También persiste `work`, `logs` y `users.json` en el directorio local del repo.
-
-La aplicación (scripts, `app.py` y HTML estático de `static/`) se incluye en la imagen a través del `Dockerfile` con `COPY . /opt/apk-signer`, por lo que el build empaqueta el código del repo; el `docker-compose.yml` solo se encarga de publicar el puerto y montar los volúmenes persistentes.

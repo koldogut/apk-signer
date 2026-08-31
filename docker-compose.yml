@@ -1,13 +1,23 @@
 services:
   apk-signer:
     build: .
+    image: apk-signer:latest
     container_name: apk-signer
     ports:
       - "8001:8001"
     volumes:
-      - ./keystore:/opt/apk-signer/keystore
       - ./secrets.json:/opt/apk-signer/secrets.json
-      - ./users.json:/opt/apk-signer/users.json
+      - ./keystore:/opt/apk-signer/keystore
+      # Directorio, no fichero: bootstrap_users.py crea aqui users.json y el
+      # PNG del QR del administrador, y ambos quedan accesibles en el host.
+      - ./data:/opt/apk-signer/data
       - ./work:/opt/apk-signer/work
       - ./logs:/opt/apk-signer/logs
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

@@ -1,11 +1,11 @@
 # Instalación en Debian/Ubuntu
 
-Guía detallada de instalación. Para la versión rápida, la operativa diaria y la referencia de la API, mira el [README](../README.md).
+Guía detallada de instalación con systemd. Para la versión rápida y la operativa diaria, mira el [README](../README.md). Para contenedores, [DOCKER.md](DOCKER.md).
 
 ## Requisitos previos
 
 * **Debian 12+ / Ubuntu 24.04+** si vas a usar el Python del sistema.
-* **Python 3.11 o superior**. `setup.sh` aborta si encuentra una versión anterior: por debajo de 3.11 no existe una `pillow` sin vulnerabilidades conocidas (los parches exigen 3.10+), y `pillow` entra como dependencia de `qrcode[pil]`. Ver la nota del README.
+* **Python 3.11 o superior**. `setup.sh` aborta si encuentra una versión anterior.
 * Salida a internet para descargar Android Command Line Tools y Build Tools.
 * Un keystore JKS real con su alias y contraseñas.
 
@@ -36,7 +36,7 @@ TLS_KEY=/etc/ssl/apk-signer/apk-signer.key \
 sudo bash setup.sh
 ```
 
-> **Build Tools 35 o superior.** Es la primera versión cuyo `zipalign` admite `-P`, necesario para alinear las librerías nativas a 16 KB como exige Android 15+. Con la 34 el servicio degrada a 4 KB y lo avisa en cada firma.
+> **Usa Build Tools 35 o superior.** Con versiones anteriores el alineado de las librerías nativas se queda en 4 KB, insuficiente para Android 15+, y el servicio lo avisa en cada firma.
 
 ### El instalador no es desatendido
 
@@ -124,7 +124,7 @@ sudo -E /opt/android-sdk/cmdline-tools/latest/bin/sdkmanager \
 "ZIPALIGN_PAGE_KB": 16
 ```
 
-> **No copies `zipalign` fuera del SDK.** Enlaza dinámicamente contra `lib64/libc++.so`, que vive dentro del directorio de Build Tools, y sacado de ahí falla con `error while loading shared libraries: libc++.so`. La firma continúa, pero **sin alinear el APK**. `aapt2` sí se puede copiar porque va enlazado estáticamente. Comprueba con `ldd`:
+> **No copies `zipalign` fuera del SDK.** Necesita las librerías de su propio directorio y fuera de ahí no arranca; la firma continúa pero sin alinear el APK. `aapt2` sí se puede copiar. Comprueba que el binario resuelve sus dependencias:
 >
 > ```bash
 > ldd /opt/android-sdk/build-tools/35.0.0/zipalign | grep "not found"
@@ -146,7 +146,7 @@ Rellena el keystore:
 "KEY_PASS": "contraseña de la clave"
 ```
 
-Y **genera la clave de sellado de la traza**. Sin ella los eventos se registran sin MAC y el encadenado no protege frente a una reescritura completa del fichero:
+Y **genera la clave que sella la traza de auditoría**. Sin ella los eventos se registran sin MAC:
 
 ```bash
 python3 -c "import os; print(os.urandom(32).hex())"
@@ -218,4 +218,4 @@ curl -kI https://localhost/        # 200
 sudo systemd-analyze security apk-signer.service | tail -1
 ```
 
-`/healthz` debe dar `true` en todo, y `zipalign_page_kb` debe valer 16. Si algo falla, [RESUMEN_ERRORES.md](RESUMEN_ERRORES.md) recoge los 30 problemas conocidos con su causa y su remedio.
+`/healthz` debe dar `true` en todo, y `zipalign_page_kb` debe valer 16. Si algo falla, [RESUMEN_ERRORES.md](RESUMEN_ERRORES.md) recoge los problemas conocidos con su causa y su remedio.
