@@ -2,6 +2,6 @@
 # requirements.txt, que no incluye nada de esto.
 -r requirements.txt
 pytest==9.1.1
-ruff==0.16.5
+ruff==0.16.6
 bandit==1.9.4
 pip-audit==2.10.1
