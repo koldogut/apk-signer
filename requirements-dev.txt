@@ -1,7 +1,7 @@
 # Dependencias solo de desarrollo y CI. La imagen de produccion usa
 # requirements.txt, que no incluye nada de esto.
 -r requirements.txt
-pytest==9.1.1
-ruff==0.16.5
+pytest==9.2.0
+ruff==0.17.3
 bandit==1.9.4
 pip-audit==2.10.1
